@@ -26,7 +26,7 @@ TARGET_COL = "target"
 STATUS_COL = "STATUS"
 
 # Statuses that count as default (target = 1)
-DEFAULT_STATUSES = ["30DD", "90DA", "SUSP", "WROF"]
+DEFAULT_STATUSES = ["30DD", "60DA", "90DA", "SUSP", "WROF"]
 # Statuses that count as non-default (target = 0)
 NON_DEFAULT_STATUSES = ["NORM", "CLSB", "CLSC"]
 
@@ -131,13 +131,13 @@ def load_prime_data(data_dir: str = None) -> pd.DataFrame:
 def load_transaction_data(data_dir: str = None) -> pd.DataFrame:
     """Load and concatenate all CSV files from the transaction data directory."""
     data_dir = data_dir or config.TRANSACTION_DATA_DIR
-    files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
+    files = sorted(glob.glob(os.path.join(data_dir, "*.xlsx")))
     if not files:
-        raise FileNotFoundError(f"No CSV files found in {data_dir}")
+        raise FileNotFoundError(f"No XLSX files found in {data_dir}")
 
     frames = []
     for f in files:
-        df = pd.read_csv(f)
+        df = pd.read_excel(f)
         frames.append(df)
     combined = pd.concat(frames, ignore_index=True)
 
@@ -155,7 +155,7 @@ def merge_data(prime_df: pd.DataFrame, txn_features_df: pd.DataFrame) -> pd.Data
     merged = prime_df.merge(
         txn_features_df,
         left_on=config.PRIME_CUSTOMER_ID,
-        right_index=True,
+        right_index=True,   
         how="left",
     )
     # Fill NaN for customers with no transactions
