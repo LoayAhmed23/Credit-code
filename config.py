@@ -25,7 +25,7 @@ TARGET_COL = "target"
 STATUS_COL = "STATUS"
 
 # Statuses that count as default (target = 1)
-DEFAULT_STATUSES = ["30DD", "90DA", "SUSP", "WROF"]
+DEFAULT_STATUSES = ["30DD", "60DA", "90DA", "SUSP", "WROF"]
 # Statuses that count as non-default (target = 0)
 NON_DEFAULT_STATUSES = ["NORM", "CLSB", "CLSC"]
 
