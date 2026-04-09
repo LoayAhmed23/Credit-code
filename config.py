@@ -19,30 +19,50 @@ REPORT_PATH = os.path.join(OUTPUT_DIR, "evaluation_report.txt")
 # ---------------------------------------------------------------------------
 # Column mappings
 # ---------------------------------------------------------------------------
-PRIME_CUSTOMER_ID = "RIM_NO"
-TXN_CUSTOMER_ID = "RIMNO"
+CUSTOMER_ID = "RIMNO"
 TARGET_COL = "target"
 STATUS_COL = "STATUS"
 
 # Statuses that count as default (target = 1)
 DEFAULT_STATUSES = ["30DD", "60DA", "90DA", "SUSP", "WROF"]
-# Statuses that count as non-default (target = 0)
-NON_DEFAULT_STATUSES = ["NORM", "CLSB", "CLSC"]
+# Everything else is non-default (target = 0)
+NON_DEFAULT_STATUSES = [
+    "NORM", "NEW", "CLSB", "CLSC", "CLSD",
+    "LOST", "CNCD", "FRAD", "BLOK", "NOAU", "EXMU",
+    "PICK", "BLCK", "STLC", "OFBL", "ONBL", "WARN",
+    "NENC", "FREZ", "EXPD", "ACCA", "EXPC",
+]
+
+# --- Prime CSV dtype handling (data arrives with commas in numbers) ---
+PRIME_STRING_COLS = [
+    "BRANCH_NAME", "ACTIVATED", "STATUS", "STATUS_NAME", "NAME",
+    "GENDER", "CUSTOMER_TYPE", "Card account status ", "ORGANIZATION",
+]
+PRIME_INT_COLS = ["RIMNO"]
+PRIME_FLOAT_COLS = [
+    "AVAILABLE_LIMIT", "LEDGER_BALANCE", "LAST_PAYMENT_AMOUNT", "OVERDUEAMOUNT",
+]
+
+# --- Transaction string cols (read as string to avoid parse errors) ---
+TXN_STRING_COLS = [
+    "DESCRIPTION", "MERCHNAME", "MERCH ID", "SOURCES",
+    "BANKBRANCH", "TRXN COUNTRY", "REVERSAL FLAG",
+]
 
 # Columns to drop before modelling (IDs, raw dates, text, etc.)
 DROP_COLS = [
-    "RIM_NO", "RIMNO", "MAPPING ACCOUNT NO.", "BRANCH_ID", "BRANCH_NAME",
-    "NAME", "ORGANIZATION", "STATUES NAME", "STATUS",
+    "RIMNO", "BRANCH_ID", "BRANCH_NAME",
+    "NAME", "ORGANIZATION", "STATUS_NAME", "STATUS",
     "FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD", "THIRD_REPLACED_CARD",
-    "CREATION_DATE", "LAST_STATEMENT_DATE", "LAST_PAYMENT_DATE",
-    "CLOSURE_DATE", "DOB", "CARD_ACCOUNT_STATUS", "source_file",
+    "CREATION_DATE", "LAST_STAEMENT_DATE", "LAST_PAYMENT_DATE",
+    "CLOSURE_DATE", "DOB", "Card account status ", "source_file",
 ]
 
 # ---------------------------------------------------------------------------
 # Date columns (for parsing)
 # ---------------------------------------------------------------------------
 DATE_COLS_PRIME = [
-    "CREATION_DATE", "LAST_STATEMENT_DATE", "LAST_PAYMENT_DATE",
+    "CREATION_DATE", "LAST_STAEMENT_DATE", "LAST_PAYMENT_DATE",
     "CLOSURE_DATE", "DOB",
 ]
 DATE_COLS_TXN = ["POST DATE", "TRXN DATE"]

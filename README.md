@@ -44,30 +44,30 @@ Place monthly customer-snapshot CSVs here. Each file should contain one row per 
 
 | Column | Description |
 |--------|-------------|
-| RIM_NO | Customer ID |
-| MAPPING ACCOUNT NO. | Account number |
+| RIM_NO | Customer ID (renamed to RIMNO on load) |
 | BRANCH_ID / BRANCH_NAME | Branch info |
 | CREATION_DATE | Account creation date |
-| CREDIT LIMIT | Card credit limit |
+| CREDIT_LIMIT | Card credit limit |
 | ACTIVATED | A (active) / I (inactive) |
-| STATUS | 4-letter code: NORM, CLSB, CLSC, WROF, 90DA, 30DD, SUSP |
-| STATUES NAME | Description matching STATUS |
+| STATUS | 4-letter code: NORM, CLSB, CLSC, WROF, 90DA, 60DA, 30DD, SUSP, etc. |
+| STATUES_NAME | Description matching STATUS |
 | DELINQUENCY | Days delinquent |
 | LAST_STATEMENT_DATE | Date of last statement |
+| NAME | Name of the product the customer has |
+| JOINING_FEE / ANNUAL_FEE | Fee info |
 | LEDGER_BALANCE | Current balance |
-| MIN_PAYMENT | Minimum payment due |
-| OVER_LIMIT | Amount over credit limit |
 | AVAILABLE_LIMIT | Remaining credit limit |
 | LAST_PAYMENT_AMOUNT | Last payment amount |
 | LAST_PAYMENT_DATE | Date of last payment |
+| TOTAL_HOLD | Amount of pending transactions |
 | GENDER / DOB | Demographics |
 | ORGANIZATION | Employer |
 | CUSTOMER_TYPE | Primary / secondary card |
-| OVERDUE_AMOUNT | Overdue amount |
+| CLOSURE_DATE | Date of the closing of the account |
+| OVERDUEAMOUNT | Amount unpaid by the due date |
 | NO_OF_CYCLES | Billing cycles since opening |
-| JOINING_FEE / ANNUAL_FEE | Fee info |
 | FIRST/SECOND/THIRD_REPLACED_CARD | Replacement card flags |
-| CARD_ACCOUNT_STATUS | Account status |
+| Card acount status | Card and account status |
 
 ### 2. Transaction Data (`transaction_data/`)
 
@@ -75,16 +75,21 @@ Place monthly transaction CSVs here. Each file should contain individual transac
 
 | Column | Description |
 |--------|-------------|
-| RIMNO | Customer ID (maps to RIM_NO in prime data) |
+| RIMNO | Customer ID (same as RIM_NO in prime data) |
 | DESCRIPTION | Bank product used |
 | POST DATE / TRXN DATE | Posting and transaction dates |
 | CCY | ISO currency code (818 = EGP, 840 = USD) |
 | ORIG AMOUNT | Original transaction amount |
-| BILLING AMT | Amount in EGP |
+| EMBEDDED _FEE | Currency exchange fee |
+| BILLING AMT | Total transaction amount in EGP |
 | MCC | Merchant category code |
 | MERCHNAME / MERCH ID | Merchant info |
+| SOURCES | Source info |
+| SETTLEMENT AMT | Total amount in USD (or EGP if originally EGP) |
+| SETTLEMENT CCY | 818 if originally EGP, otherwise 840 (USD) |
+| BANKBRANCH | Branch the customer opened their account from |
+| TRXN COUNTRY | Country the transaction happened in |
 | REVERSAL FLAG | Whether the transaction was reversed |
-| PaymentBehaviourHistory | Last 10 T/R characters (T = successful, R = reversed) |
 
 ## Usage
 
@@ -125,7 +130,7 @@ After training, the `output/` folder contains:
 
 | File | Contents |
 |------|----------|
-| `risk_scores.csv` | RIM_NO, default_probability, predicted_label |
+| `risk_scores.csv` | RIMNO, default_probability, predicted_label |
 | `evaluation_report.txt` | AUC, KS, F1, precision, recall, accuracy, confusion matrix, classification report |
 | `model.joblib` | Serialized model + preprocessing artifacts |
 
@@ -133,16 +138,14 @@ After training, the `output/` folder contains:
 
 Binary classification:
 
-- **0 (Non-default)**: STATUS in {NORM, CLSB, CLSC}
-- **1 (Default)**: STATUS in {30DD, 90DA, SUSP, WROF}
+- **0 (Non-default)**: STATUS in {NORM, NEW, CLSB, CLSC, CLSD, and all other operational statuses}
+- **1 (Default)**: STATUS in {30DD, 60DA, 90DA, SUSP, WROF}
 
 ## Engineered Features
 
 ### From Prime Data
-- `utilization_ratio` -- (credit limit - available limit) / credit limit
-- `payment_to_min_ratio` -- last payment / min payment (capped at 10)
-- `overdue_severity` -- overdue amount / credit limit
-- `overlimit_flag` -- 1 if over limit > 0
+- `utilization_ratio` -- (CREDIT_LIMIT - AVAILABLE_LIMIT) / CREDIT_LIMIT
+- `overdue_severity` -- OVERDUEAMOUNT / CREDIT_LIMIT
 - `card_replacements` -- count of replacement cards issued
 - `account_age_days` -- days between creation and last statement
 - `days_since_last_payment` -- days between last payment and last statement
@@ -158,7 +161,6 @@ Binary classification:
 - `txn_intl_count` / `txn_intl_ratio` -- international transaction count and ratio
 - `txn_reversal_count` / `txn_reversal_ratio` -- reversed transaction count and ratio
 - `unique_merchants` / `unique_mcc` -- merchant and category diversity
-- `payment_success_rate` -- ratio of "T" characters in PaymentBehaviourHistory
 
 ## Pipeline Flow
 

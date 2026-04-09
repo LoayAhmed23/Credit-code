@@ -1,5 +1,7 @@
 """
 Feature engineering for prime (customer snapshot) and transaction data.
+Includes data cleaning steps (fill-na, outlier capping) derived from
+the bank's actual data quirks.
 """
 
 import numpy as np
@@ -15,36 +17,47 @@ import config
 def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     """Derive features from the prime (customer snapshot) data."""
     df = df.copy()
+    extraction_date = pd.to_datetime("today")
 
-    # --- Utilization ratio ---
-    credit_limit = pd.to_numeric(df.get("CREDIT LIMIT", 0), errors="coerce").fillna(0)
+    # --- Fill known missing-value patterns ---
+    if "GENDER" in df.columns:
+        df["GENDER"] = df["GENDER"].fillna("Unknown")
+    if "ANNUAL_FEE" in df.columns:
+        df["ANNUAL_FEE"] = pd.to_numeric(df["ANNUAL_FEE"], errors="coerce")
+        df["ANNUAL_FEE"] = df["ANNUAL_FEE"].fillna(df["ANNUAL_FEE"].median())
+    if "JOINING_FEE" in df.columns:
+        df["JOINING_FEE"] = pd.to_numeric(df["JOINING_FEE"], errors="coerce")
+
+    # --- Outlier capping (p99) for OVERDUEAMOUNT ---
+    overdue_col = "OVERDUEAMOUNT"
+    if overdue_col in df.columns:
+        p99 = df[overdue_col].quantile(0.99)
+        df[overdue_col] = np.where(df[overdue_col] > p99, p99, df[overdue_col])
+
+    # --- Core numeric references ---
+    credit_limit = pd.to_numeric(df.get("CREDIT_LIMIT", 0), errors="coerce").fillna(0)
     available_limit = pd.to_numeric(df.get("AVAILABLE_LIMIT", 0), errors="coerce").fillna(0)
-    df["utilization_ratio"] = np.where(
-        credit_limit > 0,
-        (credit_limit - available_limit) / credit_limit,
-        0,
-    )
+    ledger = pd.to_numeric(df.get("LEDGER_BALANCE", 0), errors="coerce").fillna(0)
+    overdue = pd.to_numeric(df.get("OVERDUEAMOUNT", 0), errors="coerce").fillna(0)
+    credit_limit_safe = credit_limit.replace({0: np.nan})
 
-    # --- Payment-to-minimum-due ratio ---
-    last_payment = pd.to_numeric(df.get("LAST_PAYMENT_AMOUNT", 0), errors="coerce").fillna(0)
-    min_payment = pd.to_numeric(df.get("MIN_PAYMENT", 0), errors="coerce").fillna(0)
-    df["payment_to_min_ratio"] = np.where(
-        min_payment > 0,
-        (last_payment / min_payment).clip(upper=10),
-        0,
-    )
+    # --- Utilization ratio (ledger / limit, matching gf.py) ---
+    df["utilization_ratio"] = (ledger / credit_limit_safe).fillna(0)
+
+    # --- Available credit ratio ---
+    df["available_credit_ratio"] = (available_limit / credit_limit_safe).fillna(0)
 
     # --- Overdue severity ---
-    overdue = pd.to_numeric(df.get("OVERDUE_AMOUNT", 0), errors="coerce").fillna(0)
     df["overdue_severity"] = np.where(
         credit_limit > 0,
         overdue / credit_limit,
         0,
     )
 
-    # --- Over-limit flag ---
-    over_limit = pd.to_numeric(df.get("OVER_LIMIT", 0), errors="coerce").fillna(0)
-    df["overlimit_flag"] = (over_limit > 0).astype(int)
+    # --- Fee to limit ratio ---
+    joining_fee = pd.to_numeric(df.get("JOINING_FEE", 0), errors="coerce").fillna(0)
+    annual_fee = pd.to_numeric(df.get("ANNUAL_FEE", 0), errors="coerce").fillna(0)
+    df["fee_to_limit_ratio"] = ((joining_fee + annual_fee) / credit_limit_safe).fillna(0)
 
     # --- Card replacement count ---
     replacement_cols = [
@@ -56,21 +69,29 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["card_replacements"] = 0
 
-    # --- Account age (days) ---
-    if "LAST_STATEMENT_DATE" in df.columns and "CREATION_DATE" in df.columns:
-        df["account_age_days"] = (
-            (df["LAST_STATEMENT_DATE"] - df["CREATION_DATE"]).dt.days
+    # --- Account tenure (months from creation to today) ---
+    if "CREATION_DATE" in df.columns:
+        df["account_tenure_months"] = (
+            (extraction_date - df["CREATION_DATE"]).dt.days / 30
         ).fillna(0).clip(lower=0)
     else:
-        df["account_age_days"] = 0
+        df["account_tenure_months"] = 0
 
-    # --- Days since last payment ---
-    if "LAST_STATEMENT_DATE" in df.columns and "LAST_PAYMENT_DATE" in df.columns:
+    # --- Days since last payment (from today) ---
+    if "LAST_PAYMENT_DATE" in df.columns:
         df["days_since_last_payment"] = (
-            (df["LAST_STATEMENT_DATE"] - df["LAST_PAYMENT_DATE"]).dt.days
+            (extraction_date - df["LAST_PAYMENT_DATE"]).dt.days
         ).fillna(-1)
     else:
         df["days_since_last_payment"] = -1
+
+    # --- Time to churn (closure - creation) ---
+    if "CLOSURE_DATE" in df.columns and "CREATION_DATE" in df.columns:
+        df["time_to_churn_days"] = (
+            (df["CLOSURE_DATE"] - df["CREATION_DATE"]).dt.days
+        ).fillna(-1)
+    else:
+        df["time_to_churn_days"] = -1
 
     # --- Active flag ---
     if "ACTIVATED" in df.columns:
@@ -79,9 +100,9 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
         df["is_active"] = 1
 
     # --- Customer age ---
-    if "DOB" in df.columns and "LAST_STATEMENT_DATE" in df.columns:
+    if "DOB" in df.columns:
         df["customer_age"] = (
-            (df["LAST_STATEMENT_DATE"] - df["DOB"]).dt.days / 365.25
+            (extraction_date - df["DOB"]).dt.days / 365.25
         ).fillna(0).clip(lower=0)
     else:
         df["customer_age"] = 0
@@ -95,7 +116,6 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
         df["is_primary"] = 1
 
     # --- Ledger balance to limit ratio ---
-    ledger = pd.to_numeric(df.get("LEDGER_BALANCE", 0), errors="coerce").fillna(0)
     df["ledger_to_limit_ratio"] = np.where(
         credit_limit > 0,
         ledger / credit_limit,
@@ -116,12 +136,23 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
     Returns a DataFrame indexed by customer ID (RIMNO).
     """
     df = txn_df.copy()
-    cid = config.TXN_CUSTOMER_ID
+    cid = config.CUSTOMER_ID
+    extraction_date = pd.to_datetime("today")
 
     # Ensure numeric amounts
-    for col in ["BILLING AMT", "ORIG AMOUNT"]:
+    for col in ["BILLING AMT", "ORIG AMOUNT", "SETTLEMENT AMT"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # --- Outlier capping at p99 for amount columns ---
+    for col in ["BILLING AMT", "SETTLEMENT AMT", "ORIG AMOUNT"]:
+        if col in df.columns:
+            p99 = df[col].quantile(0.99)
+            df[col] = np.where(df[col] > p99, p99, df[col])
+
+    # --- Fill ORIG AMOUNT NaN with median ---
+    if "ORIG AMOUNT" in df.columns:
+        df["ORIG AMOUNT"] = df["ORIG AMOUNT"].fillna(df["ORIG AMOUNT"].median())
 
     # Basic transaction aggregations
     agg = df.groupby(cid).agg(
@@ -174,20 +205,12 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
     else:
         agg["unique_mcc"] = 0
 
-    # Payment success rate from PaymentBehaviourHistory
-    if "PaymentBehaviourHistory" in df.columns:
-        def _success_rate(series):
-            combined = "".join(series.dropna().astype(str))
-            if not combined:
-                return 0
-            return combined.count("T") / len(combined) if len(combined) > 0 else 0
-
-        psr = df.groupby(cid)["PaymentBehaviourHistory"].apply(_success_rate).rename(
-            "payment_success_rate"
-        )
-        agg = agg.join(psr)
+    # --- Days since last transaction (recency) ---
+    if "TRXN DATE" in df.columns:
+        txn_recency = df.groupby(cid)["TRXN DATE"].max()
+        agg["days_since_last_txn"] = (extraction_date - txn_recency).dt.days.fillna(-1)
     else:
-        agg["payment_success_rate"] = 0
+        agg["days_since_last_txn"] = -1
 
     print(f"[feature_eng] Transaction features -> {agg.shape}")
     return agg
@@ -200,8 +223,8 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
 def create_target(df: pd.DataFrame) -> pd.Series:
     """Create binary default target from STATUS column.
 
-    1 = default  (30DD, 90DA, SUSP, WROF)
-    0 = non-default (NORM, CLSB, CLSC)
+    1 = default  (30DD, 60DA, 90DA, SUSP, WROF)
+    0 = non-default (everything else)
     """
     status = df[config.STATUS_COL].astype(str).str.strip().str.upper()
     target = status.map(

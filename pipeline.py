@@ -58,7 +58,7 @@ def run_training_pipeline(tune: bool = False):
     merged = merged.loc[target.index]
 
     # Preserve customer IDs for the scored output
-    customer_ids = merged[config.PRIME_CUSTOMER_ID].copy()
+    customer_ids = merged[config.CUSTOMER_ID].copy()
 
     # 5. Preprocess
     X, y, artifacts = preprocess(merged, target, fit=True)
@@ -103,7 +103,7 @@ def run_training_pipeline(tune: bool = False):
     all_pred = (all_proba >= 0.5).astype(int)
 
     scores_df = pd.DataFrame({
-        config.PRIME_CUSTOMER_ID: customer_ids.loc[X.index].values,
+        config.CUSTOMER_ID: customer_ids.loc[X.index].values,
         "default_probability": all_proba,
         "predicted_label": all_pred,
     })
@@ -152,7 +152,7 @@ def run_scoring_pipeline(model_path: str = None,
     txn_features = engineer_transaction_features(txn_df)
     merged = merge_data(prime_df, txn_features)
 
-    customer_ids = merged[config.PRIME_CUSTOMER_ID].copy()
+    customer_ids = merged[config.CUSTOMER_ID].copy()
 
     # Preprocess (transform only — reuse fitted artifacts)
     X, _, _ = preprocess(merged, y=None, fit=False, artifacts=artifacts)
@@ -166,7 +166,7 @@ def run_scoring_pipeline(model_path: str = None,
     pred = (proba >= 0.5).astype(int)
 
     scores_df = pd.DataFrame({
-        config.PRIME_CUSTOMER_ID: customer_ids.values,
+        config.CUSTOMER_ID: customer_ids.values,
         "default_probability": proba,
         "predicted_label": pred,
     })
