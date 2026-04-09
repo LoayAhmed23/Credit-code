@@ -19,11 +19,12 @@ import config
 
 def apply_smote(X_train, y_train):
     """Apply SMOTE oversampling to the training set."""
+    print(f"  Applying SMOTE resampling ...")
     sm = SMOTE(sampling_strategy="auto", random_state=config.RANDOM_STATE)
     X_res, y_res = sm.fit_resample(X_train, y_train)
     print(
-        f"[model] SMOTE: {X_train.shape[0]} -> {X_res.shape[0]} samples  "
-        f"(minority: {int(y_train.sum())} -> {int(y_res.sum())})"
+        f"  SMOTE complete: {X_train.shape[0]:,} -> {X_res.shape[0]:,} samples  "
+        f"(minority: {int(y_train.sum()):,} -> {int(y_res.sum()):,})"
     )
     return X_res, y_res
 
@@ -50,10 +51,11 @@ def train_lightgbm(X_train, y_train, X_val, y_val, params=None):
         valid_names=["train", "valid"],
         callbacks=[
             lgb.early_stopping(stopping_rounds=config.EARLY_STOPPING_ROUNDS),
-            lgb.log_evaluation(period=50),
+            lgb.log_evaluation(period=10),
         ],
     )
-    print(f"[model] Best iteration: {bst.best_iteration}")
+    print(f"  Best iteration: {bst.best_iteration}  |  "
+          f"Best valid AUC: {bst.best_score.get('valid', {}).get('auc', 'N/A')}")
     return bst
 
 
@@ -90,16 +92,19 @@ def tune_hyperparameters(X_train, y_train):
         n_iter=config.TUNE_N_ITER,
         scoring=scorer,
         cv=config.TUNE_CV_FOLDS,
-        verbose=1,
+        verbose=2,
         random_state=config.RANDOM_STATE,
         n_jobs=-1,
     )
 
-    print("[model] Starting hyperparameter search ...")
+    print(f"  Starting hyperparameter search "
+          f"({config.TUNE_N_ITER} iterations x {config.TUNE_CV_FOLDS}-fold CV) ...")
     search.fit(X_train, y_train)
 
-    print(f"[model] Best CV AUC: {search.best_score_:.4f}")
-    print(f"[model] Best params: {search.best_params_}")
+    print(f"  Best CV AUC: {search.best_score_:.4f}")
+    print(f"  Best params:")
+    for k, v in search.best_params_.items():
+        print(f"    {k}: {v}")
     return search.best_estimator_, search.best_params_
 
 

@@ -102,7 +102,7 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     # --- Customer age ---
     if "DOB" in df.columns:
         df["customer_age"] = (
-            (extraction_date - df["DOB"]).dt.days / 365.25
+            (extraction_date - df["DOB"]).dt.days / 365
         ).fillna(0).clip(lower=0)
     else:
         df["customer_age"] = 0
