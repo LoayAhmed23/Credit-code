@@ -32,6 +32,7 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     overdue_col = "OVERDUEAMOUNT"
     if overdue_col in df.columns:
         p99 = df[overdue_col].quantile(0.99)
+        print(f"Overdue Outliers: {(df[overdue_col]>p99).sum()}")
         df[overdue_col] = np.where(df[overdue_col] > p99, p99, df[overdue_col])
 
     # --- Core numeric references ---
@@ -148,6 +149,7 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
     for col in ["BILLING AMT", "SETTLEMENT AMT", "ORIG AMOUNT"]:
         if col in df.columns:
             p99 = df[col].quantile(0.99)
+            print(f"{col} Outliers: {(df[col]>p99).sum()}")
             df[col] = np.where(df[col] > p99, p99, df[col])
 
     # --- Fill ORIG AMOUNT NaN with median ---
