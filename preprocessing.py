@@ -49,6 +49,8 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
         for c in num_cols:
             X[c] = pd.to_numeric(X[c], errors="coerce")
             med = X[c].median()
+            if pd.isna(med):
+                med = 0
             medians[c] = med
             X[c] = X[c].fillna(med)
         for c in cat_cols:
@@ -117,6 +119,16 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
         common = X.index.intersection(y.index)
         X = X.loc[common]
         y = y.loc[common]
+
+    # --- Safety net: catch any remaining NaN / Inf values ---
+    # (SMOTE and LightGBM will crash on these)
+    remaining_nan = X.isna().sum().sum()
+    if remaining_nan > 0:
+        nan_cols = X.columns[X.isna().any()].tolist()
+        print(f"[preprocess] WARNING: {remaining_nan} NaN values remain in {nan_cols} -> filling with 0")
+        X = X.fillna(0)
+
+    X = X.replace([np.inf, -np.inf], 0)
 
     print(f"[preprocess] Output shape: {X.shape}  |  fit={fit}")
     return X, y, artifacts

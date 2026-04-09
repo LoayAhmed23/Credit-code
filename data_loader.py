@@ -78,9 +78,9 @@ def load_prime_data(data_dir: str = None) -> pd.DataFrame:
         frames.append(df)
     combined = pd.concat(frames, ignore_index=True)
 
-    # Rename customer ID column (raw data has "RIM_NO:" with a colon)
-    if "RIM_NO:" in combined.columns:
-        combined = combined.rename(columns={"RIM_NO:": "RIMNO"})
+    # Rename customer ID column (raw data may have "RIM_NO:" or "RIM_NO")
+    if "RIM_NO" in combined.columns:
+        combined = combined.rename(columns={"RIM_NO": "RIMNO"})
 
     # Parse float columns (remove commas, cast)
     for col in config.PRIME_FLOAT_COLS:
