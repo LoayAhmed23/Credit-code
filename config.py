@@ -84,8 +84,9 @@ LGBM_PARAMS = {
     "bagging_fraction": 0.8,
     "bagging_freq": 5,
     "random_state": RANDOM_STATE,
-    "n_jobs": -1,
-    "device_type": "gpu",  # <--- ADDED: Tell LightGBM to run on the GPU
+    "n_jobs": -1,            # Uses all available CPU cores
+    "max_bin": 63,           # <--- ADDED: Significantly faster training (default is 255)
+    "device_type": "cpu",    # CPU is highly optimized and avoids the best_split_info_count bug
 }
 
 NUM_BOOST_ROUND = 1000
@@ -103,5 +104,5 @@ TUNE_PARAM_GRID = {
     "classifier__learning_rate": [0.01, 0.05, 0.1],
     "classifier__feature_fraction": [0.6, 0.8, 1.0],
     "classifier__bagging_fraction": [0.6, 0.8, 1.0],
-    "classifier__device_type": ["gpu"],  # <--- ADDED: Ensure tuning uses GPU too
+    "classifier__device_type": ["cpu"],  # <--- CHANGED: Ensure tuning uses CPU too
 }
