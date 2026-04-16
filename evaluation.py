@@ -5,10 +5,25 @@ Evaluation metrics and report generation.
 import numpy as np
 from sklearn.metrics import (
     roc_auc_score, roc_curve, f1_score, recall_score,
-    precision_score, accuracy_score, confusion_matrix, classification_report,
+    precision_score, accuracy_score, confusion_matrix, classification_report, precision_recall_curve
 )
 
 import config
+
+
+def find_best_threshold_fbeta(y_true, y_proba, beta=2.0) -> float:
+    """Find the threshold that maximizes the F-beta score."""
+    precision, recall, thresholds = precision_recall_curve(y_true, y_proba)
+    
+    # Avoid division by zero
+    numerator = (1 + beta**2) * (precision[:-1] * recall[:-1])
+    denominator = (beta**2 * precision[:-1] + recall[:-1])
+    
+    # Calculate fbeta, handle 0/0 and assign 0 where denominator is 0
+    fbeta = np.divide(numerator, denominator, out=np.zeros_like(numerator), where=denominator!=0)
+    
+    best_idx = np.argmax(fbeta)
+    return thresholds[best_idx]
 
 
 def ks_statistic(y_true, y_proba) -> float:
@@ -17,9 +32,10 @@ def ks_statistic(y_true, y_proba) -> float:
     return float(np.max(np.abs(tpr - fpr)))
 
 
-def evaluate(y_true, y_pred, y_proba) -> dict:
+def evaluate(y_true, y_pred, y_proba, threshold=0.5) -> dict:
     """Compute a full set of binary-classification metrics."""
     return {
+        "Threshold": threshold,
         "AUC": roc_auc_score(y_true, y_proba),
         "KS": ks_statistic(y_true, y_proba),
         "F1": f1_score(y_true, y_pred),
