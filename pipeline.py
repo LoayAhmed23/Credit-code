@@ -18,7 +18,7 @@ from feature_engineering import (
 )
 from preprocessing import preprocess
 from model import apply_smote, train_lightgbm, tune_hyperparameters, save_model, load_model
-from evaluation import evaluate, generate_report
+from evaluation import evaluate, generate_report, find_best_threshold_fbeta
 
 
 def _ensure_output_dir():
@@ -111,7 +111,12 @@ def run_training_pipeline(tune: bool = False):
         best_model, best_params = tune_hyperparameters(X_train, y_train)
         print("  Generating predictions on test set ...")
         y_proba = best_model.predict_proba(X_test)[:, 1]
-        y_pred = (y_proba >= 0.5).astype(int)
+        
+        print("  Finding best decision threshold (F-beta) ...")
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        print(f"  Best threshold: {best_threshold:.4f}")
+        
+        y_pred = (y_proba >= best_threshold).astype(int)
         model_to_save = best_model
     else:
         X_train_res, y_train_res = apply_smote(X_train, y_train)
@@ -119,13 +124,18 @@ def run_training_pipeline(tune: bool = False):
         bst = train_lightgbm(X_train_res, y_train_res, X_test, y_test)
         print("  Generating predictions on test set ...")
         y_proba = bst.predict(X_test, num_iteration=bst.best_iteration)
-        y_pred = (y_proba >= 0.5).astype(int)
+        
+        print("  Finding best decision threshold (F-beta) ...")
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        print(f"  Best threshold: {best_threshold:.4f}")
+        
+        y_pred = (y_proba >= best_threshold).astype(int)
         model_to_save = bst
 
     # ------------------------------------------------------------------
     _banner(8, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
-    metrics = evaluate(y_test, y_pred, y_proba)
+    metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
     report = generate_report(metrics, y_test, y_pred, config.REPORT_PATH)
     print(report)
 
@@ -134,7 +144,7 @@ def run_training_pipeline(tune: bool = False):
         all_proba = best_model.predict_proba(X)[:, 1]
     else:
         all_proba = bst.predict(X, num_iteration=bst.best_iteration)
-    all_pred = (all_proba >= 0.5).astype(int)
+    all_pred = (all_proba >= best_threshold).astype(int)
 
     scores_df = pd.DataFrame({
         config.CUSTOMER_ID: customer_ids.loc[X.index].values,
