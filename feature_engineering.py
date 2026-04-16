@@ -35,25 +35,46 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
         print(f"Overdue Outliers: {(df[overdue_col]>p99).sum()}")
         df[overdue_col] = np.where(df[overdue_col] > p99, p99, df[overdue_col])
 
+    # --- Helper to safely extract and convert numeric columns ---
+    def get_numeric_col(col_name: str) -> pd.Series:
+        # If column exists, pd.to_numeric handles it returning a Series.
+        # If not, we explicitly construct a Series of zeros.
+        if col_name in df.columns:
+            return pd.to_numeric(df[col_name], errors="coerce").fillna(0)
+        else:
+            return pd.Series(0, index=df.index, dtype=float)
+
     # --- Core numeric references ---
-    credit_limit = pd.to_numeric(df.get("CREDIT_LIMIT", 0), errors="coerce").fillna(0)
-    available_limit = pd.to_numeric(df.get("AVAILABLE_LIMIT", 0), errors="coerce").fillna(0)
-    ledger = pd.to_numeric(df.get("LEDGER_BALANCE", 0), errors="coerce").fillna(0)
-    overdue = pd.to_numeric(df.get("OVERDUEAMOUNT", 0), errors="coerce").fillna(0)
+    credit_limit = get_numeric_col("CREDIT_LIMIT")
+    available_limit = get_numeric_col("AVAILABLE_LIMIT")
+    ledger = get_numeric_col("LEDGER_BALANCE")
+    overdue = get_numeric_col("OVERDUEAMOUNT")
+    total_hold = get_numeric_col("TOTAL_HOLD")
+    last_payment = get_numeric_col("LAST_PAYMENT_AMOUNT")
+    min_payment = get_numeric_col("MIN_PAYMENT")
+    
     credit_limit_safe = credit_limit.replace({0: np.nan})
+    min_payment_safe = min_payment.replace({0: np.nan})
 
-    # --- Utilization ratio (ledger / limit, matching gf.py) ---
+    # --- Core utilization ---
     df["utilization_ratio"] = (ledger / credit_limit_safe).fillna(0)
+    
+    # --- Including pending transactions ---
+    df["utilization_with_hold"] = ((ledger + total_hold) / credit_limit_safe).fillna(0)
 
-    # --- Available credit ratio ---
-    df["available_credit_ratio"] = (available_limit / credit_limit_safe).fillna(0)
-
-    # --- Overdue severity ---
+    # --- Overdue severity ratio ---
+    df["overdue_ratio"] = (overdue / credit_limit_safe).fillna(0)
     df["overdue_severity"] = np.where(
         credit_limit > 0,
         overdue / credit_limit,
         0,
     )
+
+    # --- Minimum payment coverage ---
+    df["payment_coverage"] = (last_payment / min_payment_safe).fillna(-1)
+
+    # --- Available credit ratio ---
+    df["available_credit_ratio"] = (available_limit / credit_limit_safe).fillna(0)
 
     # --- Fee to limit ratio ---
     joining_fee = pd.to_numeric(df.get("JOINING_FEE", 0), errors="coerce").fillna(0)
