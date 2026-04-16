@@ -77,16 +77,15 @@ LGBM_PARAMS = {
     "objective": "binary",
     "metric": "auc",
     "boosting_type": "gbdt",
-    "learning_rate": 0.1,
-    "max_depth": 4,
-    "num_leaves": 55,
-    "min_child_weight": 5,
-    "bagging_fraction": 0.9,
-    "feature_fraction": 0.9,
-    "lambda_l1": 1e-5,
-    "lambda_l2": 100,
-    "verbosity": -1,
-    "seed": RANDOM_STATE,
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "max_depth": 5,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "random_state": RANDOM_STATE,
+    "n_jobs": -1,
+    "device_type": "gpu",  # <--- ADDED: Tell LightGBM to run on the GPU
 }
 
 NUM_BOOST_ROUND = 1000
@@ -99,12 +98,10 @@ TUNE_N_ITER = 20
 TUNE_CV_FOLDS = 3
 
 TUNE_PARAM_GRID = {
-    "model__learning_rate": [0.01, 0.05, 0.1],
-    "model__max_depth": [3, 4, 5, 6],
-    "model__num_leaves": [31, 55, 80, 100],
-    "model__min_child_weight": [1, 3, 5, 7],
-    "model__bagging_fraction": [0.7, 0.8, 0.9, 1.0],
-    "model__feature_fraction": [0.7, 0.8, 0.9, 1.0],
-    "model__lambda_l1": [1e-5, 1e-3, 1e-2],
-    "model__lambda_l2": [1, 10, 100],
+    "classifier__num_leaves": [15, 31, 63],
+    "classifier__max_depth": [3, 5, 7],
+    "classifier__learning_rate": [0.01, 0.05, 0.1],
+    "classifier__feature_fraction": [0.6, 0.8, 1.0],
+    "classifier__bagging_fraction": [0.6, 0.8, 1.0],
+    "classifier__device_type": ["gpu"],  # <--- ADDED: Ensure tuning uses GPU too
 }
