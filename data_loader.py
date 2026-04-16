@@ -67,13 +67,19 @@ def load_prime_data(data_dir: str = None) -> pd.DataFrame:
     }
 
     frames = []
-    for f in files:
-        df = pd.read_csv(
+    def _read_csv_safe(f):
+        # Read headers first to check if dates exist
+        headers = pd.read_csv(f, nrows=0, encoding="latin").columns.tolist()
+        parse_dates = [c for c in config.DATE_COLS_PRIME if c in headers]
+        return pd.read_csv(
             f,
             encoding="latin",
             dtype=str_dtype,
-            parse_dates=config.DATE_COLS_PRIME,
+            parse_dates=parse_dates,
         )
+
+    for f in files:
+        df = _read_csv_safe(f)
         df["source_file"] = os.path.basename(f)
         frames.append(df)
     combined = pd.concat(frames, ignore_index=True)
