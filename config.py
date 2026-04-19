@@ -23,8 +23,14 @@ CUSTOMER_ID = "RIMNO"
 TARGET_COL = "target"
 STATUS_COL = "STATUS"
 
-# Statuses that count as default (target = 1)
-DEFAULT_STATUSES = ["30DD", "60DA", "90DA", "SUSP", "WROF"]
+TARGET_MODE = "weighted_binary"
+
+SOFT_DEFAULT_STATUSES = ["30DD", "SUSP"]           # early warning — often self-corrects
+HARD_DEFAULT_STATUSES = ["60DA", "90DA", "WROF"]   # true default — rarely recovers
+
+# Keep for backward compatibility when you need a single binary label
+DEFAULT_STATUSES = SOFT_DEFAULT_STATUSES + HARD_DEFAULT_STATUSES
+
 # Everything else is non-default (target = 0)
 NON_DEFAULT_STATUSES = [
     "NORM", "NEW", "CLSB", "CLSC", "CLSD",
@@ -56,6 +62,7 @@ DROP_COLS = [
     "FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD", "THIRD_REPLACED_CARD",
     "CREATION_DATE", "LAST_STAEMENT_DATE", "LAST_PAYMENT_DATE",
     "CLOSURE_DATE", "DOB", "Card account status ", "source_file",
+    "OVER_LIMIT", "OVERDUEAMOUNT", "LEDGER_BALANCE", "MIN_PAYMENT_AMOUNT",
 ]
 
 # ---------------------------------------------------------------------------
