@@ -56,20 +56,73 @@ TXN_STRING_COLS = [
     "BANKBRANCH", "TRXN COUNTRY", "REVERSAL FLAG",
 ]
 
-# Columns to drop before modelling (IDs, raw dates, text, raw amounts
-# that have been replaced by ratio features, etc.)
+# ---------------------------------------------------------------------------
+# DROP_COLS — columns removed before the model ever sees the data.
+#
+# Three leakage categories:
+#   A) Direct label encodings  — these columns ARE the target in disguise
+#   B) Temporal leakage        — dates that only exist for defaulted accounts
+#                                (e.g. CLOSURE_DATE is null for active accounts)
+#   C) Raw amounts             — replaced by ratio features; keeping both
+#                                double-counts the signal and leaks the
+#                                credit limit denominator back into the model
+# ---------------------------------------------------------------------------
 DROP_COLS = [
-    "RIMNO", "BRANCH_ID", "BRANCH_NAME",
-    "NAME", "ORGANIZATION", "STATUS_NAME", "STATUS",
-    "FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD", "THIRD_REPLACED_CARD",
-    "CREATION_DATE", "LAST_STAEMENT_DATE", "LAST_PAYMENT_DATE",
-    "CLOSURE_DATE", "DOB", "Card account status ", "source_file",
-    # Raw amount columns replaced by engineered ratio features
-    "OVER_LIMIT", "OVERDUEAMOUNT", "OVERDUE_AMOUNT",
-    "LEDGER_BALANCE", "MIN_PAYMENT", "MIN_PAYMENT_AMOUNT",
-    # sample_weight is a pipeline artefact, not a model feature
+    # --- Identifiers (no predictive value) ---
+    "RIMNO",
+    "BRANCH_ID",
+    "BRANCH_NAME",
+    "MAPPING ACCOUNT NO.",
+
+    # --- (A) Direct label encodings ---
+    # STATUS / STATUS_NAME contain the exact strings used to build the target.
+    # DELINQUENCY is the numeric form of the same information (90DA -> 90 days).
+    # CARD_ACCOUNT_STATUS is another representation of the same state.
+    # Any one of these alone gives the model a perfect AUC of 1.0.
+    "STATUS",
+    "STATUS_NAME",
+    "DELINQUENCY",
+    "CARD_ACCOUNT_STATUS",
+    "Card account status ",      # alternate casing/spacing from raw CSV
+
+    # --- (B) Temporal leakage ---
+    # CLOSURE_DATE is non-null only for closed/defaulted accounts.
+    # LAST_STATEMENT_DATE clusters near the default date for defaulted accounts.
+    "CLOSURE_DATE",
+    "CREATION_DATE",
+    "LAST_STAEMENT_DATE",        # typo preserved from raw data
+    "LAST_STATEMENT_DATE",       # clean spelling also dropped
+    "LAST_PAYMENT_DATE",
+    "DOB",
+
+    # --- Free text / high-cardinality categoricals ---
+    "NAME",
+    "ORGANIZATION",
+    "DESCRIPTION",
+    "MERCHNAME",
+    "source_file",
+
+    # --- Card replacement history (administrative, not behavioural) ---
+    "FIRST_REPLACED_CARD",
+    "SECOND_REPLACED_CARD",
+    "THIRD_REPLACED_CARD",
+
+    # --- (C) Raw amount columns replaced by engineered ratio features ---
+    "OVER_LIMIT",
+    "OVERDUEAMOUNT",
+    "OVERDUE_AMOUNT",
+    "LEDGER_BALANCE",
+    "MIN_PAYMENT",
+    "MIN_PAYMENT_AMOUNT",
+
+    # --- Pipeline artefact ---
     "sample_weight",
 ]
+
+# ---------------------------------------------------------------------------
+# Leakage detection — single-feature AUC above this triggers a hard stop.
+# ---------------------------------------------------------------------------
+LEAKAGE_AUC_THRESHOLD = 0.95
 
 # ---------------------------------------------------------------------------
 # Date columns (for parsing)
@@ -98,7 +151,7 @@ LGBM_PARAMS = {
     "bagging_freq": 5,
     "random_state": RANDOM_STATE,
     "n_jobs": -1,
-    "max_bin": 63,        # faster training; default is 255
+    "max_bin": 63,
     "device_type": "cpu",
 }
 
