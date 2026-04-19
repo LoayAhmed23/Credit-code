@@ -72,7 +72,11 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     _banner(4, TOTAL, "CREATING TARGET VARIABLE")
     # ------------------------------------------------------------------
     target = create_target(merged)
-    merged = merged.loc[target.index]
+    
+    if "sample_weight" in merged.columns:
+        sample_weights = merged["sample_weight"]
+    else:
+        sample_weights = None
 
     if sample:
         print("\n  [SAMPLING MODE ACTIVE] Reducing dataset to 25% via stratified sampling...")
@@ -95,17 +99,31 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     # ------------------------------------------------------------------
     _banner(5, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
     # ------------------------------------------------------------------
-    X, y, artifacts = preprocess(merged, target, fit=True)
+    if sample_weights is not None:
+        X, y, artifacts = preprocess(merged.drop(columns=["sample_weight"]), target, fit=True)
+    else:
+        X, y, artifacts = preprocess(merged, target, fit=True)
 
     # ------------------------------------------------------------------
     _banner(6, TOTAL, "TRAIN / TEST SPLIT")
     # ------------------------------------------------------------------
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=config.TEST_SIZE,
-        stratify=y,
-        random_state=config.RANDOM_STATE,
-    )
+    if sample_weights is not None:
+        X_train, X_test, y_train, y_test, w_train, w_test = train_test_split(
+            X, y, sample_weights,
+            test_size=config.TEST_SIZE,
+            stratify=y,
+            random_state=config.RANDOM_STATE,
+        )
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y,
+            test_size=config.TEST_SIZE,
+            stratify=y,
+            random_state=config.RANDOM_STATE,
+        )
+        w_train = None
+        w_test = None
+        
     print(f"  Train set:          {X_train.shape[0]:,} samples")
     print(f"  Test set:           {X_test.shape[0]:,} samples")
     print(f"  Features:           {X_train.shape[1]}")
@@ -132,8 +150,18 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = best_model
     else:
         X_train_res, y_train_res = apply_smote(X_train, y_train)
-        print("  Training LightGBM with early stopping ...")
-        bst = train_lightgbm(X_train_res, y_train_res, X_test, y_test)
+        
+        if sample_weights is not None and not tune:
+             # Smote does not resample sample weights easily out of the box, for now pass the original weights and hope length aligns or pass w_train directly if we skip SMOTE.
+             # Given we resample, w_train needs to match X_train_res. Let's just avoid SMOTE or map 1.0 to new resampled cases.
+             # For simplicity, if we have sample_weights, we will skip SMOTE here and just use weights. 
+             print("  Skipping SMOTE because sample_weights are provided ...")
+             print("  Training LightGBM with early stopping and sample weights ...")
+             bst = train_lightgbm(X_train, y_train, X_test, y_test, sample_weight_train=w_train)
+        else:
+            print("  Training LightGBM with early stopping ...")
+            bst = train_lightgbm(X_train_res, y_train_res, X_test, y_test)
+        
         print("  Generating predictions on test set ...")
         y_proba = bst.predict(X_test, num_iteration=bst.best_iteration)
         
