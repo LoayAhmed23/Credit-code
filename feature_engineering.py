@@ -4,6 +4,8 @@ Includes data cleaning steps (fill-na, outlier capping) derived from
 the bank's actual data quirks.
 """
 
+from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 
@@ -11,38 +13,20 @@ import config
 
 
 # ---------------------------------------------------------------------------
-# Prime features
+# Helpers
 # ---------------------------------------------------------------------------
 
-def add_ratio_features(df):
-    credit = df["CREDIT_LIMIT"].replace(0, np.nan)  # avoid division by zero
+def _get_numeric(df: pd.DataFrame, *col_names: str, default: float = 0.0) -> pd.Series:
+    """Return the first matching column as a numeric Series, or a zero Series."""
+    for col in col_names:
+        if col in df.columns:
+            return pd.to_numeric(df[col], errors="coerce").fillna(default)
+    return pd.Series(default, index=df.index, dtype=float)
 
-    # Core utilization — your strongest single feature
-    df["utilization_ratio"] = df["LEDGER_BALANCE"] / credit
 
-    # How far over the limit (0 for most customers, >0 is a red flag)
-    # Note: We need to pull OVER_LIMIT here if it exists. Assume it's available or we compute it if Ledger > Credit limit. But from instructions, OVER_LIMIT seems to be a column name.
-    # In the prompt, it says OVER_LIMIT. If it doesn't exist, we'll try to get it. Oh, looking at drop cols it says OVER_LIMIT.
-    df["over_limit_ratio"] = df.get("OVER_LIMIT", df["LEDGER_BALANCE"] - df["CREDIT_LIMIT"]).clip(lower=0) / credit
-
-    # Overdue severity — what fraction of the limit is unpaid past due date
-    # In earlier config it says OVERDUEAMOUNT. Wait, instruction says OVERDUE_AMOUNT.
-    df["overdue_ratio"] = df.get("OVERDUE_AMOUNT", df.get("OVERDUEAMOUNT", 0)) / credit
-
-    # Payment behavior — are they paying the minimum or more?
-    # >1 means they paid more than minimum (good), <1 means underpaying (bad)
-    # instruction says MIN_PAYMENT, maybe it means MIN_PAYMENT_AMOUNT. Wait, in config I saw MIN_PAYMENT_AMOUNT.
-    min_pay = df.get("MIN_PAYMENT", df.get("MIN_PAYMENT_AMOUNT", 0)).replace(0, np.nan)
-    df["payment_coverage"] = df.get("LAST_PAYMENT_AMOUNT", 0) / min_pay
-
-    # Composite stress score — useful as a single summary feature
-    df["financial_stress_score"] = (
-        df["utilization_ratio"] +
-        df["over_limit_ratio"] * 2 +   # weighted heavier — over limit is worse
-        df["overdue_ratio"] * 3         # weighted heaviest — overdue is the worst signal
-    )
-
-    return df
+# ---------------------------------------------------------------------------
+# Prime features
+# ---------------------------------------------------------------------------
 
 def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     """Derive features from the prime (customer snapshot) data."""
@@ -52,76 +36,75 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     # --- Fill known missing-value patterns ---
     if "GENDER" in df.columns:
         df["GENDER"] = df["GENDER"].fillna("Unknown")
+
     if "ANNUAL_FEE" in df.columns:
         df["ANNUAL_FEE"] = pd.to_numeric(df["ANNUAL_FEE"], errors="coerce")
         df["ANNUAL_FEE"] = df["ANNUAL_FEE"].fillna(df["ANNUAL_FEE"].median())
+
     if "JOINING_FEE" in df.columns:
         df["JOINING_FEE"] = pd.to_numeric(df["JOINING_FEE"], errors="coerce")
 
-    # --- Outlier capping (p99) for OVERDUEAMOUNT ---
-    overdue_col = "OVERDUEAMOUNT"
+    # --- Outlier capping (p99) for overdue amount ---
+    overdue_col = "OVERDUEAMOUNT" if "OVERDUEAMOUNT" in df.columns else "OVERDUE_AMOUNT"
     if overdue_col in df.columns:
         p99 = df[overdue_col].quantile(0.99)
-        print(f"Overdue Outliers: {(df[overdue_col]>p99).sum()}")
-        df[overdue_col] = np.where(df[overdue_col] > p99, p99, df[overdue_col])
+        print(f"[feature_eng] Overdue outliers capped at {p99:.2f}: "
+              f"{(df[overdue_col] > p99).sum()} rows")
+        df[overdue_col] = df[overdue_col].clip(upper=p99)
 
-    # --- Helper to safely extract and convert numeric columns ---
-    def get_numeric_col(col_name: str) -> pd.Series:
-        # If column exists, pd.to_numeric handles it returning a Series.
-        # If not, we explicitly construct a Series of zeros.
-        if col_name in df.columns:
-            return pd.to_numeric(df[col_name], errors="coerce").fillna(0)
-        else:
-            return pd.Series(0, index=df.index, dtype=float)
+    # --- Core numeric references (accept both naming conventions) ---
+    credit_limit   = _get_numeric(df, "CREDIT_LIMIT")
+    available_limit = _get_numeric(df, "AVAILABLE_LIMIT")
+    ledger         = _get_numeric(df, "LEDGER_BALANCE")
+    overdue        = _get_numeric(df, "OVERDUEAMOUNT", "OVERDUE_AMOUNT")
+    total_hold     = _get_numeric(df, "TOTAL_HOLD")
+    last_payment   = _get_numeric(df, "LAST_PAYMENT_AMOUNT")
+    min_payment    = _get_numeric(df, "MIN_PAYMENT", "MIN_PAYMENT_AMOUNT")
+    over_limit_raw = _get_numeric(df, "OVER_LIMIT")
 
-    # --- Core numeric references ---
-    credit_limit = get_numeric_col("CREDIT_LIMIT")
-    available_limit = get_numeric_col("AVAILABLE_LIMIT")
-    ledger = get_numeric_col("LEDGER_BALANCE")
-    overdue = get_numeric_col("OVERDUEAMOUNT")
-    total_hold = get_numeric_col("TOTAL_HOLD")
-    last_payment = get_numeric_col("LAST_PAYMENT_AMOUNT")
-    min_payment = get_numeric_col("MIN_PAYMENT")
-    
-    credit_limit_safe = credit_limit.replace({0: np.nan})
-    min_payment_safe = min_payment.replace({0: np.nan})
+    credit_limit_safe = credit_limit.replace(0, np.nan)
+    min_payment_safe  = min_payment.replace(0, np.nan)
 
-    # --- Core utilization ---
-    df["utilization_ratio"] = (ledger / credit_limit_safe).fillna(0)
-    
-    # --- Including pending transactions ---
+    # --- Utilization ratios ---
+    df["utilization_ratio"]     = (ledger / credit_limit_safe).fillna(0)
     df["utilization_with_hold"] = ((ledger + total_hold) / credit_limit_safe).fillna(0)
+    df["available_credit_ratio"] = (available_limit / credit_limit_safe).fillna(0)
+    df["ledger_to_limit_ratio"] = df["utilization_ratio"]   # alias kept for clarity
 
-    # --- Overdue severity ratio ---
-    df["overdue_ratio"] = (overdue / credit_limit_safe).fillna(0)
-    df["overdue_severity"] = np.where(
-        credit_limit > 0,
-        overdue / credit_limit,
-        0,
-    )
+    # --- Over-limit ratio (use column if present, else derive) ---
+    if "OVER_LIMIT" in df.columns:
+        over_limit_val = over_limit_raw
+    else:
+        over_limit_val = (ledger - credit_limit).clip(lower=0)
+    df["over_limit_ratio"] = (over_limit_val / credit_limit_safe).fillna(0)
 
-    # --- Minimum payment coverage ---
+    # --- Overdue ratios ---
+    df["overdue_ratio"]    = (overdue / credit_limit_safe).fillna(0)
+    df["overdue_severity"] = df["overdue_ratio"]            # alias kept for clarity
+
+    # --- Payment coverage (>1 = paid more than minimum, <1 = underpaying) ---
     df["payment_coverage"] = (last_payment / min_payment_safe).fillna(-1)
 
-    # --- Available credit ratio ---
-    df["available_credit_ratio"] = (available_limit / credit_limit_safe).fillna(0)
+    # --- Composite financial stress score ---
+    df["financial_stress_score"] = (
+        df["utilization_ratio"]
+        + df["over_limit_ratio"]  * 2   # over-limit is worse than high utilization
+        + df["overdue_ratio"]     * 3   # overdue is the strongest default signal
+    )
 
-    # --- Fee to limit ratio ---
-    joining_fee = pd.to_numeric(df.get("JOINING_FEE", 0), errors="coerce").fillna(0)
-    annual_fee = pd.to_numeric(df.get("ANNUAL_FEE", 0), errors="coerce").fillna(0)
+    # --- Fee-to-limit ratio ---
+    joining_fee = _get_numeric(df, "JOINING_FEE")
+    annual_fee  = _get_numeric(df, "ANNUAL_FEE")
     df["fee_to_limit_ratio"] = ((joining_fee + annual_fee) / credit_limit_safe).fillna(0)
 
     # --- Card replacement count ---
     replacement_cols = [
         "FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD", "THIRD_REPLACED_CARD",
     ]
-    existing_rep_cols = [c for c in replacement_cols if c in df.columns]
-    if existing_rep_cols:
-        df["card_replacements"] = df[existing_rep_cols].notna().sum(axis=1)
-    else:
-        df["card_replacements"] = 0
+    existing_rep = [c for c in replacement_cols if c in df.columns]
+    df["card_replacements"] = df[existing_rep].notna().sum(axis=1) if existing_rep else 0
 
-    # --- Account tenure (months from creation to today) ---
+    # --- Account tenure (months since creation) ---
     if "CREATION_DATE" in df.columns:
         df["account_tenure_months"] = (
             (extraction_date - df["CREATION_DATE"]).dt.days / 30
@@ -129,7 +112,7 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["account_tenure_months"] = 0
 
-    # --- Days since last payment (from today) ---
+    # --- Days since last payment ---
     if "LAST_PAYMENT_DATE" in df.columns:
         df["days_since_last_payment"] = (
             (extraction_date - df["LAST_PAYMENT_DATE"]).dt.days
@@ -137,7 +120,7 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["days_since_last_payment"] = -1
 
-    # --- Time to churn (closure - creation) ---
+    # --- Time to churn (closure date - creation date) ---
     if "CLOSURE_DATE" in df.columns and "CREATION_DATE" in df.columns:
         df["time_to_churn_days"] = (
             (df["CLOSURE_DATE"] - df["CREATION_DATE"]).dt.days
@@ -147,11 +130,11 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Active flag ---
     if "ACTIVATED" in df.columns:
-        df["is_active"] = (df["ACTIVATED"].astype(str).str.strip().str.upper() == "A").astype(int)
+        df["is_active"] = (
+            df["ACTIVATED"].astype(str).str.strip().str.upper() == "A"
+        ).astype(int)
     else:
         df["is_active"] = 1
-
-    df = add_ratio_features(df)
 
     # --- Customer age ---
     if "DOB" in df.columns:
@@ -168,16 +151,6 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
         ).astype(int)
     else:
         df["is_primary"] = 1
-
-    # --- Ledger balance to limit ratio ---
-    df["ledger_to_limit_ratio"] = np.where(
-        credit_limit > 0,
-        ledger / credit_limit,
-        0,
-    )
-
-    # --- Additional ratio features ---
-    df = add_ratio_features(df)
 
     print(f"[feature_eng] Prime features engineered -> {df.shape}")
     return df
@@ -196,7 +169,7 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
     cid = config.CUSTOMER_ID
     extraction_date = pd.to_datetime("today")
 
-    # Ensure numeric amounts
+    # --- Ensure numeric amounts ---
     for col in ["BILLING AMT", "ORIG AMOUNT", "SETTLEMENT AMT"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
@@ -205,54 +178,54 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
     for col in ["BILLING AMT", "SETTLEMENT AMT", "ORIG AMOUNT"]:
         if col in df.columns:
             p99 = df[col].quantile(0.99)
-            print(f"{col} Outliers: {(df[col]>p99).sum()}")
-            df[col] = np.where(df[col] > p99, p99, df[col])
+            print(f"[feature_eng] {col} outliers capped at {p99:.2f}: "
+                  f"{(df[col] > p99).sum()} rows")
+            df[col] = df[col].clip(upper=p99)
 
     # --- Fill ORIG AMOUNT NaN with median ---
     if "ORIG AMOUNT" in df.columns:
         df["ORIG AMOUNT"] = df["ORIG AMOUNT"].fillna(df["ORIG AMOUNT"].median())
 
-    # Basic transaction aggregations
-    agg = df.groupby(cid).agg(
-        txn_count=(cid, "size"),
-        txn_total_amount=("BILLING AMT", "sum"),
-        txn_mean_amount=("BILLING AMT", "mean"),
-        txn_max_amount=("BILLING AMT", "max"),
-    )
+    # --- Basic transaction aggregations ---
+    billing_col = "BILLING AMT" if "BILLING AMT" in df.columns else None
+    agg_dict: dict = {
+        "txn_count": (cid, "size"),
+    }
+    if billing_col:
+        agg_dict.update({
+            "txn_total_amount": (billing_col, "sum"),
+            "txn_mean_amount":  (billing_col, "mean"),
+            "txn_max_amount":   (billing_col, "max"),
+        })
 
-    # International transaction count (CCY != 818 for non-EGP)
+    agg = df.groupby(cid).agg(**agg_dict)
+
+    # --- International transaction ratio ---
     if "CCY" in df.columns:
         df["_is_intl"] = (pd.to_numeric(df["CCY"], errors="coerce") != 818).astype(int)
-        intl = df.groupby(cid)["_is_intl"].agg(
-            txn_intl_count="sum",
-        )
-        agg = agg.join(intl)
-        agg["txn_intl_ratio"] = np.where(
-            agg["txn_count"] > 0,
-            agg["txn_intl_count"] / agg["txn_count"],
-            0,
+        agg = agg.join(df.groupby(cid)["_is_intl"].sum().rename("txn_intl_count"))
+        agg["txn_intl_ratio"] = (agg["txn_intl_count"] / agg["txn_count"]).where(
+            agg["txn_count"] > 0, other=0
         )
     else:
         agg["txn_intl_count"] = 0
         agg["txn_intl_ratio"] = 0
 
-    # Reversal count
+    # --- Reversal ratio ---
     if "REVERSAL FLAG" in df.columns:
         df["_is_reversal"] = (
-            df["REVERSAL FLAG"].astype(str).str.strip().str.upper().isin(["Y", "YES", "1", "TRUE"])
+            df["REVERSAL FLAG"].astype(str).str.strip().str.upper()
+            .isin(["Y", "YES", "1", "TRUE"])
         ).astype(int)
-        rev = df.groupby(cid)["_is_reversal"].agg(txn_reversal_count="sum")
-        agg = agg.join(rev)
-        agg["txn_reversal_ratio"] = np.where(
-            agg["txn_count"] > 0,
-            agg["txn_reversal_count"] / agg["txn_count"],
-            0,
+        agg = agg.join(df.groupby(cid)["_is_reversal"].sum().rename("txn_reversal_count"))
+        agg["txn_reversal_ratio"] = (agg["txn_reversal_count"] / agg["txn_count"]).where(
+            agg["txn_count"] > 0, other=0
         )
     else:
         agg["txn_reversal_count"] = 0
         agg["txn_reversal_ratio"] = 0
 
-    # Merchant diversity
+    # --- Merchant diversity ---
     if "MERCH ID" in df.columns:
         agg = agg.join(df.groupby(cid)["MERCH ID"].nunique().rename("unique_merchants"))
     else:
@@ -278,34 +251,53 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
 # Target creation
 # ---------------------------------------------------------------------------
 
-def create_target(df: pd.DataFrame, mode: str=config.TARGET_MODE) -> pd.Series:
-    """Create binary default target from STATUS column.
+def create_target(df: pd.DataFrame, mode: str | None = None) -> pd.DataFrame:
+    """Create the target column (and optionally sample_weight) in-place.
 
-    1 = default  (30DD, 60DA, 90DA, SUSP, WROF)
-    0 = non-default (everything else)
+    Returns the full DataFrame so callers can access both 'target' and
+    'sample_weight' without silent column loss.
+
+    Modes
+    -----
+    hard_only       : 1 for 60DA / 90DA / WROF only  (recommended)
+    weighted_binary : 1 for all defaults; soft defaults get weight=0.4
+    tiered          : 0=normal, 1=soft default, 2=hard default
+    all             : 1 for all DEFAULT_STATUSES (original behaviour)
     """
-    mode = getattr(config, "TARGET_MODE", "all")
+    if mode is None:
+        mode = getattr(config, "TARGET_MODE", "all")
+
+    df = df.copy()
 
     if mode == "hard_only":
-        df["target"] = df[config.STATUS_COL].isin(config.HARD_DEFAULT_STATUSES).astype(int)
+        df["target"] = df[config.STATUS_COL].isin(
+            config.HARD_DEFAULT_STATUSES
+        ).astype(int)
+
+    elif mode == "weighted_binary":
+        all_defaults = config.HARD_DEFAULT_STATUSES + config.SOFT_DEFAULT_STATUSES
+        df["target"] = df[config.STATUS_COL].isin(all_defaults).astype(int)
+        weight_map = {
+            **{s: 1.0 for s in config.HARD_DEFAULT_STATUSES},
+            **{s: 0.4 for s in config.SOFT_DEFAULT_STATUSES},
+        }
+        df["sample_weight"] = df[config.STATUS_COL].map(weight_map).fillna(0.0)
 
     elif mode == "tiered":
         df["target"] = np.where(
             df[config.STATUS_COL].isin(config.HARD_DEFAULT_STATUSES), 2,
-            np.where(df[config.STATUS_COL].isin(config.SOFT_DEFAULT_STATUSES), 1, 0)
+            np.where(df[config.STATUS_COL].isin(config.SOFT_DEFAULT_STATUSES), 1, 0),
         )
 
-    elif mode == "weighted_binary":
-        df["target"] = df[config.STATUS_COL].isin(
-            config.HARD_DEFAULT_STATUSES + config.SOFT_DEFAULT_STATUSES
-        ).astype(int)
-        
-        df["sample_weight"] = df[config.STATUS_COL].map({
-            **{s: 1.0 for s in config.HARD_DEFAULT_STATUSES},
-            **{s: 0.4 for s in config.SOFT_DEFAULT_STATUSES},
-        }).fillna(0.0)
-
     elif mode == "all":
-        df["target"] = df[config.STATUS_COL].isin(config.DEFAULT_STATUSES).astype(int)
+        df["target"] = df[config.STATUS_COL].isin(
+            config.DEFAULT_STATUSES
+        ).astype(int)
 
-    return df["target"]
+    else:
+        raise ValueError(
+            f"Unknown TARGET_MODE '{mode}'. "
+            "Choose from: hard_only, weighted_binary, tiered, all."
+        )
+
+    return df
