@@ -8,6 +8,8 @@ import os
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import roc_auc_score
 
 import config
 from data_loader import load_prime_data, load_transaction_data, merge_data
@@ -33,6 +35,69 @@ def _banner(step, total, title):
 
 
 # ---------------------------------------------------------------------------
+# Leakage detection
+# ---------------------------------------------------------------------------
+
+def check_for_leakage(X: pd.DataFrame, y: pd.Series,
+                      threshold: float = None,
+                      top_n: int = 10,
+                      abort_on_leak: bool = True) -> list[tuple[str, float]]:
+    """Fit a depth-1 decision tree on each feature individually.
+
+    Any feature with a single-feature AUC above `threshold` is flagged as a
+    leakage suspect — it alone is almost perfectly predictive of the target,
+    which should not be possible with legitimate pre-event features.
+
+    Parameters
+    ----------
+    X               : feature matrix (post-preprocessing)
+    y               : binary target series
+    threshold       : AUC cutoff (defaults to config.LEAKAGE_AUC_THRESHOLD)
+    top_n           : how many suspects to print
+    abort_on_leak   : if True, raise RuntimeError when suspects are found
+                      so the pipeline halts before wasting training time
+
+    Returns
+    -------
+    List of (column_name, auc) tuples sorted descending by AUC.
+    """
+    threshold = threshold or getattr(config, "LEAKAGE_AUC_THRESHOLD", 0.95)
+    suspects = []
+
+    for col in X.columns:
+        col_vals = X[[col]].fillna(-999)
+        try:
+            clf = DecisionTreeClassifier(max_depth=1, random_state=config.RANDOM_STATE)
+            clf.fit(col_vals, y)
+            auc = roc_auc_score(y, clf.predict_proba(col_vals)[:, 1])
+            if auc > threshold:
+                suspects.append((col, round(auc, 4)))
+        except Exception:
+            continue
+
+    suspects.sort(key=lambda x: -x[1])
+
+    if suspects:
+        print(f"\n{'!' * 60}")
+        print(f"  LEAKAGE WARNING — {len(suspects)} feature(s) with single-feature "
+              f"AUC > {threshold}:")
+        for col, auc in suspects[:top_n]:
+            print(f"    {col:<45} AUC = {auc}")
+        print(f"  Add these columns to config.DROP_COLS and re-run.")
+        print(f"{'!' * 60}\n")
+
+        if abort_on_leak:
+            raise RuntimeError(
+                f"Pipeline aborted: {len(suspects)} leakage suspect(s) found. "
+                f"See output above. Set abort_on_leak=False to override."
+            )
+    else:
+        print(f"  [leakage check] No suspects found above AUC {threshold}. Proceeding.")
+
+    return suspects
+
+
+# ---------------------------------------------------------------------------
 # Training pipeline
 # ---------------------------------------------------------------------------
 
@@ -45,10 +110,9 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         If True, run RandomizedSearchCV for hyperparameter tuning instead
         of training with the default parameters.
     sample : bool
-        If True, use only 25% of the data using stratified sampling
-        to train faster for testing/debugging purposes.
+        If True, use only 25% of the data (stratified) for fast iteration.
     """
-    TOTAL = 8
+    TOTAL = 9
     _ensure_output_dir()
 
     # ------------------------------------------------------------------
@@ -71,7 +135,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     # ------------------------------------------------------------------
     _banner(4, TOTAL, "CREATING TARGET VARIABLE")
     # ------------------------------------------------------------------
-    # create_target returns a full DataFrame (with optional sample_weight column)
+    # create_target returns the full DataFrame (with optional sample_weight)
     merged = create_target(merged)
     target = merged[config.TARGET_COL]
 
@@ -81,7 +145,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     )
 
     if sample:
-        print("\n  [SAMPLING MODE ACTIVE] Reducing dataset to 25% via stratified sampling ...")
+        print("\n  [SAMPLING MODE] Reducing dataset to 25% via stratified sampling ...")
         keep_idx, _ = train_test_split(
             merged.index,
             train_size=0.25,
@@ -106,12 +170,20 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     # ------------------------------------------------------------------
     X, y, artifacts = preprocess(merged, target, fit=True)
 
-    # Align sample_weight index to X after preprocessing may drop rows
+    # Align sample_weight to X after preprocessing may drop rows
     if sample_weight is not None:
         sample_weight = sample_weight.loc[X.index]
 
     # ------------------------------------------------------------------
-    _banner(6, TOTAL, "TRAIN / TEST SPLIT")
+    _banner(6, TOTAL, "LEAKAGE CHECK")
+    # ------------------------------------------------------------------
+    # Runs before train/test split so we catch leakage on the full feature
+    # matrix — any suspect column will have a near-perfect single-feature AUC
+    # regardless of which split it's measured on.
+    check_for_leakage(X, y, abort_on_leak=True)
+
+    # ------------------------------------------------------------------
+    _banner(7, TOTAL, "TRAIN / TEST SPLIT")
     # ------------------------------------------------------------------
     split_kwargs = dict(
         test_size=config.TEST_SIZE,
@@ -120,12 +192,12 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     )
 
     if sample_weight is not None:
-        X_train, X_test, y_train, y_test, sw_train, sw_test = train_test_split(
+        X_train, X_test, y_train, y_test, sw_train, _ = train_test_split(
             X, y, sample_weight, **split_kwargs
         )
     else:
         X_train, X_test, y_train, y_test = train_test_split(X, y, **split_kwargs)
-        sw_train = sw_test = None
+        sw_train = None
 
     print(f"  Train set:          {X_train.shape[0]:,} samples")
     print(f"  Test set:           {X_test.shape[0]:,} samples")
@@ -135,9 +207,9 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     if tune:
-        _banner(7, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
     else:
-        _banner(7, TOTAL, "SMOTE RESAMPLING + LIGHTGBM TRAINING")
+        _banner(8, TOTAL, "SMOTE RESAMPLING + LIGHTGBM TRAINING")
     # ------------------------------------------------------------------
 
     if tune:
@@ -149,18 +221,18 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
         print(f"  Best threshold: {best_threshold:.4f}")
 
-        y_pred       = (y_proba >= best_threshold).astype(int)
+        y_pred        = (y_proba >= best_threshold).astype(int)
         model_to_save = best_model
 
     else:
         X_train_res, y_train_res = apply_smote(X_train, y_train)
-        # sample_weight is per original row; after SMOTE synthetic rows have no
-        # weight entry, so we only pass it when not resampling
+        # sample_weight rows don't map to SMOTE synthetic rows, so we
+        # pass None here — SMOTE already balances the class distribution.
         print("  Training LightGBM with early stopping ...")
         bst = train_lightgbm(
             X_train_res, y_train_res,
             X_test, y_test,
-            sample_weight_train=None,   # SMOTE already balances the classes
+            sample_weight_train=None,
         )
         print("  Generating predictions on test set ...")
         y_proba = bst.predict(X_test, num_iteration=bst.best_iteration)
@@ -173,7 +245,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = bst
 
     # ------------------------------------------------------------------
-    _banner(8, TOTAL, "EVALUATION & OUTPUT")
+    _banner(9, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
     metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
     report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH)
@@ -187,14 +259,14 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     all_pred = (all_proba >= best_threshold).astype(int)
 
     scores_df = pd.DataFrame({
-        config.CUSTOMER_ID:     customer_ids.loc[X.index].values,
-        "default_probability":  all_proba,
-        "predicted_label":      all_pred,
+        config.CUSTOMER_ID:    customer_ids.loc[X.index].values,
+        "default_probability": all_proba,
+        "predicted_label":     all_pred,
     })
     scores_df.to_csv(config.SCORES_PATH, index=False)
     print(f"  Risk scores saved to {config.SCORES_PATH}")
 
-    # Persist best_threshold alongside the model so scoring uses the same cutoff
+    # Save best_threshold inside artifacts so scoring uses the same cutoff
     save_model(model_to_save, {**artifacts, "best_threshold": best_threshold})
 
     print()
@@ -221,8 +293,8 @@ def run_scoring_pipeline(model_path: str = None,
     _banner(1, TOTAL, "LOADING SAVED MODEL")
     model, artifacts = load_model(model_path)
 
-    # Retrieve the threshold used at training time; fall back to 0.5 if
-    # the model was saved before this field was added
+    # Use the threshold saved at training time; fall back to 0.5 for
+    # models saved before this field was added.
     best_threshold = artifacts.get("best_threshold", 0.5)
     print(f"  Using decision threshold: {best_threshold:.4f}")
 
