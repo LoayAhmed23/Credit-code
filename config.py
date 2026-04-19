@@ -28,7 +28,7 @@ TARGET_MODE = "weighted_binary"
 SOFT_DEFAULT_STATUSES = ["30DD", "SUSP"]           # early warning — often self-corrects
 HARD_DEFAULT_STATUSES = ["60DA", "90DA", "WROF"]   # true default — rarely recovers
 
-# Keep for backward compatibility when you need a single binary label
+# Backward-compatible combined list
 DEFAULT_STATUSES = SOFT_DEFAULT_STATUSES + HARD_DEFAULT_STATUSES
 
 # Everything else is non-default (target = 0)
@@ -46,7 +46,8 @@ PRIME_STRING_COLS = [
 ]
 PRIME_INT_COLS = ["RIMNO"]
 PRIME_FLOAT_COLS = [
-    "AVAILABLE_LIMIT", "LEDGER_BALANCE", "LAST_PAYMENT_AMOUNT", "OVERDUEAMOUNT", "CREDIT_LIMIT"
+    "AVAILABLE_LIMIT", "LEDGER_BALANCE", "LAST_PAYMENT_AMOUNT",
+    "OVERDUEAMOUNT", "CREDIT_LIMIT",
 ]
 
 # --- Transaction string cols (read as string to avoid parse errors) ---
@@ -55,14 +56,19 @@ TXN_STRING_COLS = [
     "BANKBRANCH", "TRXN COUNTRY", "REVERSAL FLAG",
 ]
 
-# Columns to drop before modelling (IDs, raw dates, text, etc.)
+# Columns to drop before modelling (IDs, raw dates, text, raw amounts
+# that have been replaced by ratio features, etc.)
 DROP_COLS = [
     "RIMNO", "BRANCH_ID", "BRANCH_NAME",
     "NAME", "ORGANIZATION", "STATUS_NAME", "STATUS",
     "FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD", "THIRD_REPLACED_CARD",
     "CREATION_DATE", "LAST_STAEMENT_DATE", "LAST_PAYMENT_DATE",
     "CLOSURE_DATE", "DOB", "Card account status ", "source_file",
-    "OVER_LIMIT", "OVERDUEAMOUNT", "LEDGER_BALANCE", "MIN_PAYMENT_AMOUNT",
+    # Raw amount columns replaced by engineered ratio features
+    "OVER_LIMIT", "OVERDUEAMOUNT", "OVERDUE_AMOUNT",
+    "LEDGER_BALANCE", "MIN_PAYMENT", "MIN_PAYMENT_AMOUNT",
+    # sample_weight is a pipeline artefact, not a model feature
+    "sample_weight",
 ]
 
 # ---------------------------------------------------------------------------
@@ -91,9 +97,9 @@ LGBM_PARAMS = {
     "bagging_fraction": 0.8,
     "bagging_freq": 5,
     "random_state": RANDOM_STATE,
-    "n_jobs": -1,            # Uses all available CPU cores
-    "max_bin": 63,           # <--- ADDED: Significantly faster training (default is 255)
-    "device_type": "cpu",    # CPU is highly optimized and avoids the best_split_info_count bug
+    "n_jobs": -1,
+    "max_bin": 63,        # faster training; default is 255
+    "device_type": "cpu",
 }
 
 NUM_BOOST_ROUND = 1000
@@ -105,11 +111,12 @@ EARLY_STOPPING_ROUNDS = 50
 TUNE_N_ITER = 20
 TUNE_CV_FOLDS = 3
 
+# IMPORTANT: prefix must match the pipeline step name "model", not "classifier"
 TUNE_PARAM_GRID = {
-    "classifier__num_leaves": [15, 31, 63],
-    "classifier__max_depth": [3, 5, 7],
-    "classifier__learning_rate": [0.01, 0.05, 0.1],
-    "classifier__feature_fraction": [0.6, 0.8, 1.0],
-    "classifier__bagging_fraction": [0.6, 0.8, 1.0],
-    "classifier__device_type": ["cpu"],  # <--- CHANGED: Ensure tuning uses CPU too
+    "model__num_leaves":       [15, 31, 63],
+    "model__max_depth":        [3, 5, 7],
+    "model__learning_rate":    [0.01, 0.05, 0.1],
+    "model__feature_fraction": [0.6, 0.8, 1.0],
+    "model__bagging_fraction": [0.6, 0.8, 1.0],
+    "model__device_type":      ["cpu"],
 }
