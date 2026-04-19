@@ -14,6 +14,36 @@ import config
 # Prime features
 # ---------------------------------------------------------------------------
 
+def add_ratio_features(df):
+    credit = df["CREDIT_LIMIT"].replace(0, np.nan)  # avoid division by zero
+
+    # Core utilization — your strongest single feature
+    df["utilization_ratio"] = df["LEDGER_BALANCE"] / credit
+
+    # How far over the limit (0 for most customers, >0 is a red flag)
+    # Note: We need to pull OVER_LIMIT here if it exists. Assume it's available or we compute it if Ledger > Credit limit. But from instructions, OVER_LIMIT seems to be a column name.
+    # In the prompt, it says OVER_LIMIT. If it doesn't exist, we'll try to get it. Oh, looking at drop cols it says OVER_LIMIT.
+    df["over_limit_ratio"] = df.get("OVER_LIMIT", df["LEDGER_BALANCE"] - df["CREDIT_LIMIT"]).clip(lower=0) / credit
+
+    # Overdue severity — what fraction of the limit is unpaid past due date
+    # In earlier config it says OVERDUEAMOUNT. Wait, instruction says OVERDUE_AMOUNT.
+    df["overdue_ratio"] = df.get("OVERDUE_AMOUNT", df.get("OVERDUEAMOUNT", 0)) / credit
+
+    # Payment behavior — are they paying the minimum or more?
+    # >1 means they paid more than minimum (good), <1 means underpaying (bad)
+    # instruction says MIN_PAYMENT, maybe it means MIN_PAYMENT_AMOUNT. Wait, in config I saw MIN_PAYMENT_AMOUNT.
+    min_pay = df.get("MIN_PAYMENT", df.get("MIN_PAYMENT_AMOUNT", 0)).replace(0, np.nan)
+    df["payment_coverage"] = df.get("LAST_PAYMENT_AMOUNT", 0) / min_pay
+
+    # Composite stress score — useful as a single summary feature
+    df["financial_stress_score"] = (
+        df["utilization_ratio"] +
+        df["over_limit_ratio"] * 2 +   # weighted heavier — over limit is worse
+        df["overdue_ratio"] * 3         # weighted heaviest — overdue is the worst signal
+    )
+
+    return df
+
 def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     """Derive features from the prime (customer snapshot) data."""
     df = df.copy()
@@ -121,6 +151,8 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["is_active"] = 1
 
+    df = add_ratio_features(df)
+
     # --- Customer age ---
     if "DOB" in df.columns:
         df["customer_age"] = (
@@ -143,6 +175,9 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
         ledger / credit_limit,
         0,
     )
+
+    # --- Additional ratio features ---
+    df = add_ratio_features(df)
 
     print(f"[feature_eng] Prime features engineered -> {df.shape}")
     return df
@@ -243,19 +278,34 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
 # Target creation
 # ---------------------------------------------------------------------------
 
-def create_target(df: pd.DataFrame) -> pd.Series:
+def create_target(df: pd.DataFrame, mode: str=config.TARGET_MODE) -> pd.Series:
     """Create binary default target from STATUS column.
 
     1 = default  (30DD, 60DA, 90DA, SUSP, WROF)
     0 = non-default (everything else)
     """
-    status = df[config.STATUS_COL].astype(str).str.strip().str.upper()
-    target = status.map(
-        {s: 1 for s in config.DEFAULT_STATUSES}
-        | {s: 0 for s in config.NON_DEFAULT_STATUSES}
-    )
-    unmapped = target.isna().sum()
-    if unmapped > 0:
-        print(f"[feature_eng] WARNING: {unmapped} rows with unknown STATUS -> dropped")
-        target = target.dropna()
-    return target.astype(int).rename(config.TARGET_COL)
+    mode = getattr(config, "TARGET_MODE", "all")
+
+    if mode == "hard_only":
+        df["target"] = df[config.STATUS_COL].isin(config.HARD_DEFAULT_STATUSES).astype(int)
+
+    elif mode == "tiered":
+        df["target"] = np.where(
+            df[config.STATUS_COL].isin(config.HARD_DEFAULT_STATUSES), 2,
+            np.where(df[config.STATUS_COL].isin(config.SOFT_DEFAULT_STATUSES), 1, 0)
+        )
+
+    elif mode == "weighted_binary":
+        df["target"] = df[config.STATUS_COL].isin(
+            config.HARD_DEFAULT_STATUSES + config.SOFT_DEFAULT_STATUSES
+        ).astype(int)
+        
+        df["sample_weight"] = df[config.STATUS_COL].map({
+            **{s: 1.0 for s in config.HARD_DEFAULT_STATUSES},
+            **{s: 0.4 for s in config.SOFT_DEFAULT_STATUSES},
+        }).fillna(0.0)
+
+    elif mode == "all":
+        df["target"] = df[config.STATUS_COL].isin(config.DEFAULT_STATUSES).astype(int)
+
+    return df["target"]
