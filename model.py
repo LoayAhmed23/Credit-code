@@ -19,7 +19,7 @@ import config
 
 def apply_smote(X_train, y_train):
     """Apply SMOTE oversampling to the training set."""
-    print(f"  Applying SMOTE resampling ...")
+    print("  Applying SMOTE resampling ...")
     sm = SMOTE(sampling_strategy="auto", random_state=config.RANDOM_STATE)
     X_res, y_res = sm.fit_resample(X_train, y_train)
     print(
@@ -33,7 +33,8 @@ def apply_smote(X_train, y_train):
 # Training
 # ---------------------------------------------------------------------------
 
-def train_lightgbm(X_train, y_train, X_val, y_val, params=None, sample_weight_train=None):
+def train_lightgbm(X_train, y_train, X_val, y_val,
+                   params=None, sample_weight_train=None):
     """Train a LightGBM model with early stopping.
 
     Returns the trained Booster.
@@ -41,7 +42,7 @@ def train_lightgbm(X_train, y_train, X_val, y_val, params=None, sample_weight_tr
     params = params or config.LGBM_PARAMS
 
     lgb_train = lgb.Dataset(X_train, label=y_train, weight=sample_weight_train)
-    lgb_val = lgb.Dataset(X_val, label=y_val, reference=lgb_train)
+    lgb_val   = lgb.Dataset(X_val,   label=y_val,   reference=lgb_train)
 
     bst = lgb.train(
         params,
@@ -54,8 +55,8 @@ def train_lightgbm(X_train, y_train, X_val, y_val, params=None, sample_weight_tr
             lgb.log_evaluation(period=10),
         ],
     )
-    print(f"  Best iteration: {bst.best_iteration}  |  "
-          f"Best valid AUC: {bst.best_score.get('valid', {}).get('auc', 'N/A')}")
+    best_auc = bst.best_score.get("valid", {}).get("auc", "N/A")
+    print(f"  Best iteration: {bst.best_iteration}  |  Best valid AUC: {best_auc}")
     return bst
 
 
@@ -72,7 +73,7 @@ def tune_hyperparameters(X_train, y_train):
         steps=[
             ("smote", SMOTE(random_state=config.RANDOM_STATE)),
             (
-                "model",
+                "model",                          # step name is "model"
                 lgb.LGBMClassifier(
                     objective="binary",
                     metric="auc",
@@ -88,7 +89,7 @@ def tune_hyperparameters(X_train, y_train):
 
     search = RandomizedSearchCV(
         pipeline,
-        param_distributions=config.TUNE_PARAM_GRID,
+        param_distributions=config.TUNE_PARAM_GRID,  # must use "model__" prefix
         n_iter=config.TUNE_N_ITER,
         scoring=scorer,
         cv=config.TUNE_CV_FOLDS,
@@ -97,14 +98,17 @@ def tune_hyperparameters(X_train, y_train):
         n_jobs=-1,
     )
 
-    print(f"  Starting hyperparameter search "
-          f"({config.TUNE_N_ITER} iterations x {config.TUNE_CV_FOLDS}-fold CV) ...")
+    print(
+        f"  Starting hyperparameter search "
+        f"({config.TUNE_N_ITER} iterations x {config.TUNE_CV_FOLDS}-fold CV) ..."
+    )
     search.fit(X_train, y_train)
 
     print(f"  Best CV AUC: {search.best_score_:.4f}")
-    print(f"  Best params:")
+    print("  Best params:")
     for k, v in search.best_params_.items():
         print(f"    {k}: {v}")
+
     return search.best_estimator_, search.best_params_
 
 
