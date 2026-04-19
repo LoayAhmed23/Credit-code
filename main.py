@@ -22,10 +22,12 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # --- train ---
-    sub.add_parser("train", help="Train the model with default hyperparameters")
+    train_parser = sub.add_parser("train", help="Train the model with default hyperparameters")
+    train_parser.add_argument("--sample", action="store_true", help="Use stratified 25% of data for rapid training/debugging")
 
     # --- tune ---
-    sub.add_parser("tune", help="Train with RandomizedSearchCV hyperparameter tuning")
+    tune_parser = sub.add_parser("tune", help="Train with RandomizedSearchCV hyperparameter tuning")
+    tune_parser.add_argument("--sample", action="store_true", help="Use stratified 25% of data for rapid tuning/debugging")
 
     # --- score ---
     score_parser = sub.add_parser("score", help="Score new data using a saved model")
@@ -49,11 +51,11 @@ def main():
     args = parser.parse_args()
 
     if args.command == "train":
-        metrics = run_training_pipeline(tune=False)
+        metrics = run_training_pipeline(tune=False, sample=args.sample)
         print("\nDone. Metrics:", metrics)
 
     elif args.command == "tune":
-        metrics = run_training_pipeline(tune=True)
+        metrics = run_training_pipeline(tune=True, sample=args.sample)
         print("\nDone. Metrics:", metrics)
 
     elif args.command == "score":
