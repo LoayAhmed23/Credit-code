@@ -36,7 +36,7 @@ def _banner(step, total, title):
 # Training pipeline
 # ---------------------------------------------------------------------------
 
-def run_training_pipeline(tune: bool = False):
+def run_training_pipeline(tune: bool = False, sample: bool = False):
     """Full training pipeline: load -> engineer -> preprocess -> train -> evaluate.
 
     Parameters
@@ -44,6 +44,9 @@ def run_training_pipeline(tune: bool = False):
     tune : bool
         If True, run RandomizedSearchCV for hyperparameter tuning instead
         of training with the default parameters.
+    sample : bool
+        If True, use only 25% of the data using stratified sampling
+        to train faster for testing/debugging purposes.
     """
     TOTAL = 8
     _ensure_output_dir()
@@ -70,6 +73,15 @@ def run_training_pipeline(tune: bool = False):
     # ------------------------------------------------------------------
     target = create_target(merged)
     merged = merged.loc[target.index]
+
+    if sample:
+        print("\n  [SAMPLING MODE ACTIVE] Reducing dataset to 25% via stratified sampling...")
+        merged, _, target, _ = train_test_split(
+            merged, target,
+            train_size=0.25,
+            stratify=target,
+            random_state=config.RANDOM_STATE
+        )
 
     n_default = int(target.sum())
     n_total = len(target)
