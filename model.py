@@ -33,14 +33,14 @@ def apply_smote(X_train, y_train):
 # Training
 # ---------------------------------------------------------------------------
 
-def train_lightgbm(X_train, y_train, X_val, y_val, params=None):
+def train_lightgbm(X_train, y_train, X_val, y_val, params=None, sample_weight_train=None):
     """Train a LightGBM model with early stopping.
 
     Returns the trained Booster.
     """
     params = params or config.LGBM_PARAMS
 
-    lgb_train = lgb.Dataset(X_train, label=y_train)
+    lgb_train = lgb.Dataset(X_train, label=y_train, weight=sample_weight_train)
     lgb_val = lgb.Dataset(X_val, label=y_val, reference=lgb_train)
 
     bst = lgb.train(
