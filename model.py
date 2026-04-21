@@ -24,8 +24,32 @@ def get_top_features_by_gain(booster: "xgb.Booster", feature_order: list[str], t
 
     gain_dict = booster.get_score(importance_type="gain")
 
+    # If XGBoost was trained without feature_names, keys will look like f0,f1,...
+    # Map them back to the provided feature_order.
+    if gain_dict and all(isinstance(k, str) and k.startswith("f") and k[1:].isdigit() for k in gain_dict.keys()):
+        mapped = {}
+        for k, v in gain_dict.items():
+            idx = int(k[1:])
+            if 0 <= idx < len(feature_order):
+                mapped[feature_order[idx]] = float(v)
+        gain_dict = mapped
+
     scored = [(f, float(gain_dict.get(f, 0.0))) for f in feature_order]
     scored.sort(key=lambda t: t[1], reverse=True)
+
+    # Fallback: if everything is zero (can happen on degenerate training), use split counts.
+    if scored and scored[0][1] == 0.0:
+        weight_dict = booster.get_score(importance_type="weight")
+        if weight_dict and all(isinstance(k, str) and k.startswith("f") and k[1:].isdigit() for k in weight_dict.keys()):
+            mapped = {}
+            for k, v in weight_dict.items():
+                idx = int(k[1:])
+                if 0 <= idx < len(feature_order):
+                    mapped[feature_order[idx]] = float(v)
+            weight_dict = mapped
+        scored = [(f, float(weight_dict.get(f, 0.0))) for f in feature_order]
+        scored.sort(key=lambda t: t[1], reverse=True)
+
     return [f for f, _ in scored[: min(top_n, len(scored))]]
 
 
@@ -64,8 +88,25 @@ def train_xgboost(X_train, y_train, X_val, y_val, params=None, sample_weight_tra
         num_pos = (y_train == 1).sum()
         params["scale_pos_weight"] = num_neg / num_pos if num_pos > 0 else 1.0
 
-    xgb_train = xgb.DMatrix(X_train, label=y_train, weight=sample_weight_train)
-    xgb_val   = xgb.DMatrix(X_val,   label=y_val)
+    # IMPORTANT: pass explicit feature_names so get_score() returns real column
+    # names instead of f0/f1/... (prevents top-feature selection mismatch).
+    feature_names = None
+    try:
+        feature_names = list(X_train.columns)
+    except Exception:
+        feature_names = None
+
+    xgb_train = xgb.DMatrix(
+        X_train,
+        label=y_train,
+        weight=sample_weight_train,
+        feature_names=feature_names,
+    )
+    xgb_val = xgb.DMatrix(
+        X_val,
+        label=y_val,
+        feature_names=feature_names,
+    )
 
     bst = xgb.train(
         params,
