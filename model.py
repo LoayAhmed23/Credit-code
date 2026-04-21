@@ -3,7 +3,9 @@ Model training, SMOTE resampling, hyperparameter tuning, and persistence.
 """
 
 import numpy as np
-import lightgbm as lgb
+import xgboost as xgb
+import matplotlib.pyplot as plt
+import os
 import joblib
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
@@ -17,40 +19,32 @@ import config
 # Training
 # ---------------------------------------------------------------------------
 
-def train_lightgbm(X_train, y_train, X_val, y_val,
+def train_xgboost(X_train, y_train, X_val, y_val,   
                    params=None, sample_weight_train=None):
-    """Train a LightGBM model with early stopping.
+    """Train an XGBoost model with early stopping.   
 
     Returns the trained Booster.
     """
-    params = params or config.LGBM_PARAMS
+    params = params or config.XGB_PARAMS
 
-    # Inject scale_pos_weight if we know it's a very imbalanced dataset
-    # We estimate missing parameters based on ~6.4% rate, so negative ~ 93.6%
-    if params and "scale_pos_weight" not in params and "is_unbalance" not in params:
-        # Default ~ 6.4%, non-default ~ 93.6%, ratio is about 14.6
-        pos_count = y_train.sum()
-        neg_count = len(y_train) - pos_count
-        if pos_count > 0:
-            params["scale_pos_weight"] = neg_count / pos_count
-
-    lgb_train = lgb.Dataset(X_train, label=y_train, weight=sample_weight_train)
-    lgb_val   = lgb.Dataset(X_val,   label=y_val,   reference=lgb_train)
-
-    bst = lgb.train(
-        params,
-        lgb_train,
-        num_boost_round=config.NUM_BOOST_ROUND,
-        valid_sets=[lgb_train, lgb_val],
-        valid_names=["train", "valid"],
-        callbacks=[
-            lgb.early_stopping(stopping_rounds=config.EARLY_STOPPING_ROUNDS),
-            lgb.log_evaluation(period=10),
-        ],
+    # XGBoost scikit-learn API seamlessly integrates with native DMatrix backend internally
+    # and provides better GridSearchCV synergy than the native training API block
+    clf = xgb.XGBClassifier(
+        n_estimators=config.NUM_BOOST_ROUND,
+        early_stopping_rounds=config.EARLY_STOPPING_ROUNDS,
+        **params
     )
-    best_auc = bst.best_score.get("valid", {}).get("auc", "N/A")
-    print(f"  Best iteration: {bst.best_iteration}  |  Best valid AUC: {best_auc}")
-    return bst
+    
+    clf.fit(
+        X_train, y_train,
+        eval_set=[(X_train, y_train), (X_val, y_val)],
+        sample_weight=sample_weight_train,
+        verbose=10
+    )
+    
+    best_auc = clf.best_score
+    print(f"  Best iteration: {clf.best_iteration}  |  Best valid AUC: {best_auc}")
+    return clf
 
 
 # ---------------------------------------------------------------------------
@@ -58,23 +52,24 @@ def train_lightgbm(X_train, y_train, X_val, y_val,
 # ---------------------------------------------------------------------------
 
 def tune_hyperparameters(X_train, y_train):
-    """Run RandomizedSearchCV over LightGBM pipeline.
+    """Run RandomizedSearchCV over a SMOTE + XGBoost pipeline.
 
     Returns (best_estimator, best_params).
     """
-    pos_count = y_train.sum()
-    neg_count = len(y_train) - pos_count
-    spw = neg_count / pos_count if pos_count > 0 else 1.0
-
-    # SMOTE is being removed, so ImbPipeline not strictly necessary, 
-    # but we will just pass LGBMClassifier directly if we drop SMOTE.
-    model = lgb.LGBMClassifier(
-        objective="binary",
-        metric="auc",
-        boosting_type="gbdt",
-        verbosity=-1,
-        random_state=config.RANDOM_STATE,
-        scale_pos_weight=spw,
+    pipeline = ImbPipeline(
+        steps=[
+            ("smote", SMOTE(random_state=config.RANDOM_STATE)),
+            (
+                "model",                          # step name is "model"
+                xgb.XGBClassifier(
+                    objective="binary:logistic",
+                    eval_metric="auc",
+                    tree_method="hist",
+                    device="cuda",
+                    random_state=config.RANDOM_STATE,
+                ),
+            ),
+        ]
     )
 
     scorer = make_scorer(roc_auc_score, needs_proba=True)
@@ -83,7 +78,7 @@ def tune_hyperparameters(X_train, y_train):
     param_grid = {k.replace("model__", ""): v for k, v in config.TUNE_PARAM_GRID.items()}
 
     search = RandomizedSearchCV(
-        model,
+        pipeline,
         param_distributions=param_grid,
         n_iter=config.TUNE_N_ITER,
         scoring=scorer,

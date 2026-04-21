@@ -139,20 +139,17 @@ DATE_COLS_TXN = ["POST DATE", "TRXN DATE"]
 RANDOM_STATE = 42
 TEST_SIZE = 0.3
 
-LGBM_PARAMS = {
-    "objective": "binary",
-    "metric": "auc",
-    "boosting_type": "gbdt",
+XGB_PARAMS = {
+    "objective": "binary:logistic",
+    "eval_metric": "auc",
     "learning_rate": 0.05,
-    "num_leaves": 31,
     "max_depth": 5,
-    "feature_fraction": 0.8,
-    "bagging_fraction": 0.8,
-    "bagging_freq": 5,
+    "colsample_bytree": 0.8,
+    "subsample": 0.8,
     "random_state": RANDOM_STATE,
     "n_jobs": -1,
-    "max_bin": 63,
-    "device_type": "cpu",
+    "tree_method": "hist",
+    "device": "cuda",
 }
 
 NUM_BOOST_ROUND = 1000
@@ -166,10 +163,10 @@ TUNE_CV_FOLDS = 3
 
 # IMPORTANT: prefix must match the pipeline step name "model", not "classifier"
 TUNE_PARAM_GRID = {
-    "model__num_leaves":       [15, 31, 63],
     "model__max_depth":        [3, 5, 7],
-    "model__learning_rate":    [0.01, 0.05, 0.1],
-    "model__feature_fraction": [0.6, 0.8, 1.0],
-    "model__bagging_fraction": [0.6, 0.8, 1.0],
-    "model__device_type":      ["cpu"],
+    "model__learning_rate":    [0.01, 0.05, 0.1],    
+    "model__colsample_bytree": [0.6, 0.8, 1.0],      
+    "model__subsample":        [0.6, 0.8, 1.0],      
+    "model__tree_method":      ["hist"],
+    "model__device":           ["cuda"],
 }

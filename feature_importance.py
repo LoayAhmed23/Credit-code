@@ -3,7 +3,7 @@ import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
-import lightgbm as lgb
+import xgboost as xgb
 import joblib
 
 sys.path.append(os.path.abspath('.'))
@@ -15,7 +15,7 @@ def plot_feature_importance():
     sns.set_theme(style="whitegrid")
     plt.rcParams["figure.figsize"] = (12, 10)
 
-    print("Starting LightGBM pipeline on 25% stratified partition...")
+    print("Starting XGBoost pipeline on 25% stratified partition...")
     metrics = run_training_pipeline(tune=False, sample=True)
     print("\n--- Pipeline Finished. Model saved explicitly ---")
 
@@ -32,18 +32,26 @@ def plot_feature_importance():
         feature_names = artifacts["feature_order"]
     except Exception as e:
         print(f"Could not extract feature names: {e}")
-        feature_names = [f"feature_{i}" for i in range(model.num_feature())]
+        try:
+            feature_names = model.get_booster().feature_names
+        except:
+            feature_names = [f"feature_{i}" for i in range(model.n_features_in_)]
 
-    print(f"Total features fed to LightGBM: {len(feature_names)}")
+    print(f"Total features fed to XGBoost: {len(feature_names)}")
 
-    if hasattr(model, 'feature_importance'):
-        importance_gain = model.feature_importance(importance_type='gain')
-        importance_split = model.feature_importance(importance_type='split')
+    if hasattr(model, 'get_booster'):
+        booster = model.get_booster()
+        importance_gain = booster.get_score(importance_type='gain')
+        importance_weight = booster.get_score(importance_type='weight') # Equivalent to split
+
+        # Maps dict mapping string to numerical logic back to correctly ordered list matching feature_order
+        gain_list = [importance_gain.get(f, 0) for f in feature_names]
+        weight_list = [importance_weight.get(f, 0) for f in feature_names]
         
         df_imp = pd.DataFrame({
             'Feature Name': feature_names,
-            'Importance (Gain)': importance_gain,
-            'Importance (Split)': importance_split
+            'Importance (Gain)': gain_list,
+            'Importance (Split)': weight_list
         })
 
         df_imp['Feature Name'] = df_imp['Feature Name'].str.replace('num__', '').str.replace('cat__', '')
