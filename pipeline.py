@@ -209,7 +209,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     if tune:
         _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
     else:
-        _banner(8, TOTAL, "SMOTE RESAMPLING + LIGHTGBM TRAINING")
+        _banner(8, TOTAL, "LIGHTGBM TRAINING WITH NATIVE IMBALANCE HANDLING")
     # ------------------------------------------------------------------
 
     if tune:
@@ -225,12 +225,18 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = best_model
 
     else:
-        X_train_res, y_train_res = apply_smote(X_train, y_train)
-        # sample_weight rows don't map to SMOTE synthetic rows, so we
-        # pass None here — SMOTE already balances the class distribution.
+        # We no longer apply SMOTE
         print("  Training LightGBM with early stopping ...")
+        
+        # Manually compute scale_pos_weight for native imbalance handling
+        pos_count = y_train.sum()
+        neg_count = len(y_train) - pos_count
+        spw = neg_count / pos_count if pos_count > 0 else 1.0
+
+        print(f"  Implicit scale_pos_weight ~ {spw:.2f}")
+
         bst = train_lightgbm(
-            X_train_res, y_train_res,
+            X_train, y_train,
             X_test, y_test,
             sample_weight_train=None,
         )

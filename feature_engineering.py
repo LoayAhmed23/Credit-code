@@ -67,10 +67,10 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     if "JOINING_FEE" in df.columns:
         df["JOINING_FEE"] = pd.to_numeric(df["JOINING_FEE"], errors="coerce")
 
-    # --- Outlier capping (p99) for overdue amount ---
+    # --- Outlier capping (p99.9) for overdue amount ---
     overdue_col = "OVERDUEAMOUNT" if "OVERDUEAMOUNT" in df.columns else "OVERDUE_AMOUNT"
     if overdue_col in df.columns:
-        p99 = df[overdue_col].quantile(0.99)
+        p99 = df[overdue_col].quantile(0.999)
         print(f"[feature_eng] Overdue outliers capped at {p99:.2f}: "
               f"{(df[overdue_col] > p99).sum()} rows")
         df[overdue_col] = df[overdue_col].clip(upper=p99)
@@ -203,10 +203,10 @@ def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # --- Outlier capping at p99 ---
+    # --- Outlier capping at p99.9 ---
     for col in ["BILLING AMT", "SETTLEMENT AMT", "ORIG AMOUNT"]:
         if col in df.columns:
-            p99 = df[col].quantile(0.99)
+            p99 = df[col].quantile(0.999)
             print(f"[feature_eng] {col} outliers capped at {p99:.2f}: "
                   f"{(df[col] > p99).sum()} rows")
             df[col] = df[col].clip(upper=p99)

@@ -5,7 +5,7 @@ Supports fit (training) and transform-only (scoring) modes.
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 
 import config
 
@@ -43,16 +43,12 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
         cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
         num_cols = [c for c in X.columns if c not in cat_cols]
 
-        # --- Missing-value imputation ---
-        medians = {}
-        modes = {}
+        # --- Missing-value handling ---
+        # Note: LightGBM handles missing numerical values natively.
         for c in num_cols:
             X[c] = pd.to_numeric(X[c], errors="coerce")
-            med = X[c].median()
-            if pd.isna(med):
-                med = 0
-            medians[c] = med
-            X[c] = X[c].fillna(med)
+
+        modes = {}
         for c in cat_cols:
             mode_val = X[c].mode().iloc[0] if not X[c].mode().empty else "UNKNOWN"
             modes[c] = mode_val
@@ -65,16 +61,10 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
             X[c] = le.fit_transform(X[c].astype(str))
             encoders[c] = le
 
-        # --- Standard-scale numericals ---
-        scaler = StandardScaler()
-        X[num_cols] = scaler.fit_transform(X[num_cols])
-
         artifacts = {
             "cat_cols": cat_cols,
             "num_cols": num_cols,
             "encoders": encoders,
-            "scaler": scaler,
-            "medians": medians,
             "modes": modes,
             "feature_order": X.columns.tolist(),
         }
@@ -89,7 +79,6 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
         for c in num_cols:
             if c in X.columns:
                 X[c] = pd.to_numeric(X[c], errors="coerce")
-                X[c] = X[c].fillna(artifacts["medians"].get(c, 0))
         for c in cat_cols:
             if c in X.columns:
                 X[c] = X[c].fillna(artifacts["modes"].get(c, "UNKNOWN"))
@@ -104,14 +93,10 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
                     )
                 )
 
-        existing_num = [c for c in num_cols if c in X.columns]
-        if existing_num:
-            X[existing_num] = artifacts["scaler"].transform(X[existing_num])
-
-        # Ensure same column order; add missing columns as 0
+        # Ensure same column order; add missing columns as np.nan
         for c in artifacts["feature_order"]:
             if c not in X.columns:
-                X[c] = 0
+                X[c] = np.nan
         X = X[artifacts["feature_order"]]
 
     # Align indices
@@ -120,15 +105,9 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
         X = X.loc[common]
         y = y.loc[common]
 
-    # --- Safety net: catch any remaining NaN / Inf values ---
-    # (SMOTE and LightGBM will crash on these)
-    remaining_nan = X.isna().sum().sum()
-    if remaining_nan > 0:
-        nan_cols = X.columns[X.isna().any()].tolist()
-        print(f"[preprocess] WARNING: {remaining_nan} NaN values remain in {nan_cols} -> filling with 0")
-        X = X.fillna(0)
-
-    X = X.replace([np.inf, -np.inf], 0)
+    # --- Safety net: catch any remaining NaN / Inf values in categorical columns only ---
+    # LightGBM handles NaNs in numericals, but strings/inf should go.
+    X = X.replace([np.inf, -np.inf], np.nan)
 
     print(f"[preprocess] Output shape: {X.shape}  |  fit={fit}")
     return X, y, artifacts

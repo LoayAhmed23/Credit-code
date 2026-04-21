@@ -14,22 +14,6 @@ import config
 
 
 # ---------------------------------------------------------------------------
-# SMOTE
-# ---------------------------------------------------------------------------
-
-def apply_smote(X_train, y_train):
-    """Apply SMOTE oversampling to the training set."""
-    print("  Applying SMOTE resampling ...")
-    sm = SMOTE(sampling_strategy="auto", random_state=config.RANDOM_STATE)
-    X_res, y_res = sm.fit_resample(X_train, y_train)
-    print(
-        f"  SMOTE complete: {X_train.shape[0]:,} -> {X_res.shape[0]:,} samples  "
-        f"(minority: {int(y_train.sum()):,} -> {int(y_res.sum()):,})"
-    )
-    return X_res, y_res
-
-
-# ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
 
@@ -40,6 +24,15 @@ def train_lightgbm(X_train, y_train, X_val, y_val,
     Returns the trained Booster.
     """
     params = params or config.LGBM_PARAMS
+
+    # Inject scale_pos_weight if we know it's a very imbalanced dataset
+    # We estimate missing parameters based on ~6.4% rate, so negative ~ 93.6%
+    if params and "scale_pos_weight" not in params and "is_unbalance" not in params:
+        # Default ~ 6.4%, non-default ~ 93.6%, ratio is about 14.6
+        pos_count = y_train.sum()
+        neg_count = len(y_train) - pos_count
+        if pos_count > 0:
+            params["scale_pos_weight"] = neg_count / pos_count
 
     lgb_train = lgb.Dataset(X_train, label=y_train, weight=sample_weight_train)
     lgb_val   = lgb.Dataset(X_val,   label=y_val,   reference=lgb_train)
@@ -65,31 +58,33 @@ def train_lightgbm(X_train, y_train, X_val, y_val,
 # ---------------------------------------------------------------------------
 
 def tune_hyperparameters(X_train, y_train):
-    """Run RandomizedSearchCV over a SMOTE + LightGBM pipeline.
+    """Run RandomizedSearchCV over LightGBM pipeline.
 
     Returns (best_estimator, best_params).
     """
-    pipeline = ImbPipeline(
-        steps=[
-            ("smote", SMOTE(random_state=config.RANDOM_STATE)),
-            (
-                "model",                          # step name is "model"
-                lgb.LGBMClassifier(
-                    objective="binary",
-                    metric="auc",
-                    boosting_type="gbdt",
-                    verbosity=-1,
-                    random_state=config.RANDOM_STATE,
-                ),
-            ),
-        ]
+    pos_count = y_train.sum()
+    neg_count = len(y_train) - pos_count
+    spw = neg_count / pos_count if pos_count > 0 else 1.0
+
+    # SMOTE is being removed, so ImbPipeline not strictly necessary, 
+    # but we will just pass LGBMClassifier directly if we drop SMOTE.
+    model = lgb.LGBMClassifier(
+        objective="binary",
+        metric="auc",
+        boosting_type="gbdt",
+        verbosity=-1,
+        random_state=config.RANDOM_STATE,
+        scale_pos_weight=spw,
     )
 
     scorer = make_scorer(roc_auc_score, needs_proba=True)
 
+    # Convert parameter grid to avoid model__ prefix since we don't have pipeline
+    param_grid = {k.replace("model__", ""): v for k, v in config.TUNE_PARAM_GRID.items()}
+
     search = RandomizedSearchCV(
-        pipeline,
-        param_distributions=config.TUNE_PARAM_GRID,  # must use "model__" prefix
+        model,
+        param_distributions=param_grid,
         n_iter=config.TUNE_N_ITER,
         scoring=scorer,
         cv=config.TUNE_CV_FOLDS,
