@@ -21,7 +21,7 @@ from feature_engineering import (
 from preprocessing import preprocess
 from model import apply_smote, train_lightgbm, tune_hyperparameters, save_model, load_model
 from evaluation import evaluate, generate_report, find_best_threshold_fbeta
-
+from feature_importance import plot_feature_importance
 
 def _ensure_output_dir():
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
@@ -279,6 +279,11 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     print("=" * 60)
     print("  PIPELINE COMPLETE")
     print("=" * 60)
+
+    try:
+        plot_feature_importance()
+    except Exception as e:
+        print(f"Error plotting feature importance: {e}")
 
     return metrics
 
