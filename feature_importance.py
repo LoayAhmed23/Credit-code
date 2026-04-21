@@ -131,8 +131,11 @@ def train_intersection_model():
 
     intersection_features = list(top_20_gain.intersection(top_30_weight))
 
-    print(f"Found {len(intersection_features)} distinct features in the intersection set.")
-    print(f"Intersection Features: {intersection_features}")
+    print("\n" + "*"*60)
+    print("  COPY-PASTE READY INTERSECTION LIST:")
+    print("*"*60)
+    print(f"INTERSECTION_FEATURES = {intersection_features}")
+    print("*"*60 + "\n")
 
     if not intersection_features:
         print("No intersecting features found. Cannot train model.")
