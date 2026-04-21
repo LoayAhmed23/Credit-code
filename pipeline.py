@@ -101,7 +101,7 @@ def check_for_leakage(X: pd.DataFrame, y: pd.Series,
 # Training pipeline
 # ---------------------------------------------------------------------------
 
-def run_training_pipeline(tune: bool = False, sample: bool = False):
+def run_training_pipeline(tune: bool = False, sample: bool = False, selected_features: list = None):
     """Full training pipeline: load -> engineer -> preprocess -> train -> evaluate.
 
     Parameters
@@ -169,6 +169,23 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     _banner(5, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
     # ------------------------------------------------------------------
     X, y, artifacts = preprocess(merged, target, fit=True)
+
+    # Filter to selected features if provided
+    if selected_features is not None:
+        valid_features = [f for f in selected_features if f in X.columns]
+        X = X[valid_features]
+        artifacts["feature_order"] = valid_features
+        artifacts["num_cols"] = [c for c in artifacts["num_cols"] if c in valid_features]
+        artifacts["cat_cols"] = [c for c in artifacts["cat_cols"] if c in valid_features]
+        
+        # Prune unused encoders and modes to save memory (optional but clean)
+        artifacts["encoders"] = {k: v for k, v in artifacts["encoders"].items() if k in valid_features}
+        if "modes" in artifacts:
+            artifacts["modes"] = {k: v for k, v in artifacts["modes"].items() if k in valid_features}
+        if "medians" in artifacts:
+            artifacts["medians"] = {k: v for k, v in artifacts["medians"].items() if k in valid_features}
+
+        print(f"  [Feature Selection] Reduced dataset to {len(valid_features)} intersection features.")
 
     # Align sample_weight to X after preprocessing may drop rows
     if sample_weight is not None:

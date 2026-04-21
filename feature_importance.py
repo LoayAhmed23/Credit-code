@@ -84,5 +84,76 @@ def plot_feature_importance():
     else:
         print("Model doesn't support feature importance via get_score.")
 
+def train_intersection_model():
+    """Extract top 20 features by Gain and Top 30 by Weight, find their intersection, 
+    and train a faster, focused model."""
+    print("\n" + "="*60)
+    print("  TRAINING NEW MODEL ON FEATURE INTERSECTION")
+    print("="*60)
+    
+    try:
+        pipeline_data = joblib.load(config.MODEL_PATH)  
+        model = pipeline_data["model"]
+        artifacts = pipeline_data["artifacts"]
+    except Exception as e:
+        print(f"Base model required to extract importances not found: {e}")
+        return
+
+    try:
+        feature_names = artifacts["feature_order"]      
+    except Exception as e:
+        if hasattr(model, "feature_names"):
+            feature_names = model.feature_names
+        elif hasattr(model, "get_score"):
+            feature_names = list(model.get_score().keys())
+        else:
+            return
+
+    if not hasattr(model, "get_score"):
+        print("Base model does not support get_score()")
+        return
+
+    # Extract raw importance dicts
+    importance_gain_dict = model.get_score(importance_type="gain")
+    importance_weight_dict = model.get_score(importance_type="weight")
+
+    # Map to DataFrame
+    df_imp = pd.DataFrame({'Feature Name': feature_names})
+    df_imp['Importance (Gain)'] = df_imp['Feature Name'].map(importance_gain_dict).fillna(0)
+    df_imp['Importance (Weight)'] = df_imp['Feature Name'].map(importance_weight_dict).fillna(0)        
+
+    # Clean names (required since pipeline uses cleaned names or native columns)
+    df_imp['Clean Name'] = df_imp['Feature Name'].str.replace('num__', '').str.replace('cat__', '')   
+
+    # Extract top 20 Gain and Top 30 weight specifically by name
+    top_20_gain = set(df_imp.sort_values(by='Importance (Gain)', ascending=False).head(20)['Clean Name'])
+    top_30_weight = set(df_imp.sort_values(by='Importance (Weight)', ascending=False).head(30)['Clean Name'])
+
+    intersection_features = list(top_20_gain.intersection(top_30_weight))
+
+    print(f"Found {len(intersection_features)} distinct features in the intersection set.")
+    print(f"Intersection Features: {intersection_features}")
+
+    if not intersection_features:
+        print("No intersecting features found. Cannot train model.")
+        return
+
+    # To avoid overwriting the base model, we can temporarily change the save path in config
+    original_model_path = config.MODEL_PATH
+    config.MODEL_PATH = original_model_path.replace(".joblib", "_intersection.joblib")
+    
+    try:
+        from pipeline import run_training_pipeline
+        # Run training loop *specifically* on the finalized intersection
+        metrics = run_training_pipeline(tune=False, sample=False, selected_features=intersection_features)
+        print(f"\nFinal Intersection Model Metrics: {metrics}")
+    except Exception as e:
+        print(f"Failed to train intersection model: {e}")
+    finally:
+        # Restore configuration
+        config.MODEL_PATH = original_model_path
+
+
 if __name__ == "__main__":
     plot_feature_importance()
+    train_intersection_model()

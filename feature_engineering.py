@@ -148,14 +148,14 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     # --- Time to churn (closure - creation) ---
     # IMPORTANT: this feature is derived from CLOSURE_DATE which is a leakage
     # source (non-null only for closed/defaulted accounts). The raw
-    # CLOSURE_DATE is in DROP_COLS; time_to_churn_days is also dropped there
-    # because it encodes the same information.
-    if "CLOSURE_DATE" in df.columns and "CREATION_DATE" in df.columns:
-        df["time_to_churn_days"] = (
-            (df["CLOSURE_DATE"] - df["CREATION_DATE"]).dt.days
-        ).fillna(-1)
-    else:
-        df["time_to_churn_days"] = -1
+    # # CLOSURE_DATE is in DROP_COLS; time_to_churn_days is also dropped there
+    # # because it encodes the same information.
+    # if "CLOSURE_DATE" in df.columns and "CREATION_DATE" in df.columns:
+    #     df["time_to_churn_days"] = (
+    #         (df["CLOSURE_DATE"] - df["CREATION_DATE"]).dt.days
+    #     ).fillna(-1)
+    # else:
+    #     df["time_to_churn_days"] = -1
 
     # --- Active flag ---
     if "ACTIVATED" in df.columns:
