@@ -11,6 +11,42 @@ from sklearn.metrics import make_scorer, roc_auc_score
 import config
 
 
+def get_top_features_by_gain(booster: "xgb.Booster", feature_order: list[str], top_n: int = 20) -> list[str]:
+    """Return the top-N features ranked by XGBoost 'gain'.
+
+    Notes
+    -----
+    - Only features present in `feature_order` are considered.
+    - Features never used in a split have gain=0 and will be ranked last.
+    """
+    if top_n <= 0:
+        raise ValueError("top_n must be a positive integer")
+
+    gain_dict = booster.get_score(importance_type="gain")
+
+    scored = [(f, float(gain_dict.get(f, 0.0))) for f in feature_order]
+    scored.sort(key=lambda t: t[1], reverse=True)
+    return [f for f, _ in scored[: min(top_n, len(scored))]]
+
+
+def subset_to_features(X_train, X_test, X_all, artifacts: dict, selected_features: list[str]):
+    """Subset train/test/all matrices + artifacts to a fixed ordered feature list."""
+    if not selected_features:
+        raise ValueError("selected_features is empty")
+
+    # Keep only features that exist (defensive against any mismatch)
+    selected_features = [c for c in selected_features if c in X_train.columns]
+    if not selected_features:
+        raise ValueError("None of the selected_features exist in X_train")
+
+    X_train2 = X_train[selected_features]
+    X_test2 = X_test[selected_features]
+    X_all2 = X_all[selected_features]
+
+    artifacts2 = {**artifacts, "feature_order": list(selected_features)}
+    return X_train2, X_test2, X_all2, artifacts2
+
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------

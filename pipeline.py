@@ -19,7 +19,14 @@ from feature_engineering import (
     create_target,
 )
 from preprocessing import preprocess
-from model import train_xgboost, tune_hyperparameters, save_model, load_model
+from model import (
+    train_xgboost,
+    tune_hyperparameters,
+    save_model,
+    load_model,
+    get_top_features_by_gain,
+    subset_to_features,
+)
 from evaluation import evaluate, generate_report, find_best_threshold_fbeta
 from feature_importance import plot_feature_importance
 
@@ -101,7 +108,7 @@ def check_for_leakage(X: pd.DataFrame, y: pd.Series,
 # Training pipeline
 # ---------------------------------------------------------------------------
 
-def run_training_pipeline(tune: bool = False, sample: bool = False, selected_features: list = None):
+def run_training_pipeline(tune: bool = False, sample: bool = False):
     """Full training pipeline: load -> engineer -> preprocess -> train -> evaluate.
 
     Parameters
@@ -112,7 +119,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False, selected_fea
     sample : bool
         If True, use only 25% of the data (stratified) for fast iteration.
     """
-    TOTAL = 9
+    TOTAL = 10
     _ensure_output_dir()
 
     # ------------------------------------------------------------------
@@ -169,23 +176,6 @@ def run_training_pipeline(tune: bool = False, sample: bool = False, selected_fea
     _banner(5, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
     # ------------------------------------------------------------------
     X, y, artifacts = preprocess(merged, target, fit=True)
-
-    # Filter to selected features if provided
-    if selected_features is not None:
-        valid_features = [f for f in selected_features if f in X.columns]
-        X = X[valid_features]
-        artifacts["feature_order"] = valid_features
-        artifacts["num_cols"] = [c for c in artifacts["num_cols"] if c in valid_features]
-        artifacts["cat_cols"] = [c for c in artifacts["cat_cols"] if c in valid_features]
-        
-        # Prune unused encoders and modes to save memory (optional but clean)
-        artifacts["encoders"] = {k: v for k, v in artifacts["encoders"].items() if k in valid_features}
-        if "modes" in artifacts:
-            artifacts["modes"] = {k: v for k, v in artifacts["modes"].items() if k in valid_features}
-        if "medians" in artifacts:
-            artifacts["medians"] = {k: v for k, v in artifacts["medians"].items() if k in valid_features}
-
-        print(f"  [Feature Selection] Reduced dataset to {len(valid_features)} intersection features.")
 
     # Align sample_weight to X after preprocessing may drop rows
     if sample_weight is not None:
@@ -260,7 +250,71 @@ def run_training_pipeline(tune: bool = False, sample: bool = False, selected_fea
         model_to_save = bst
 
     # ------------------------------------------------------------------
-    _banner(9, TOTAL, "EVALUATION & OUTPUT")
+    # ------------------------------------------------------------------
+    _banner(9, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
+    # ------------------------------------------------------------------
+    # Train a light model to get gain-based importances, then retrain using
+    # only the top-N features. This avoids any intersection-based selection.
+    print("  Training a temporary model to compute gain importances ...")
+    tmp_bst = train_xgboost(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        sample_weight_train=sw_train,
+    )
+
+    top_n = getattr(config, "TOP_N_GAIN_FEATURES", 20)
+    selected_features = get_top_features_by_gain(
+        tmp_bst,
+        artifacts.get("feature_order", list(X_train.columns)),
+        top_n=top_n,
+    )
+    print(f"  Selected {len(selected_features)} features by gain (top {top_n}).")
+
+    X_train, X_test, X, artifacts = subset_to_features(
+        X_train, X_test, X, artifacts, selected_features
+    )
+    print(f"  Training with selected features only: {X_train.shape[1]}")
+
+    if tune:
+        # NOTE: tuning path currently uses sklearn API and ignores early stopping.
+        # We keep behavior consistent: after selection, tune on the reduced set.
+        _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        best_model, best_params = tune_hyperparameters(X_train, y_train)
+        print("  Generating predictions on test set ...")
+        y_proba = best_model.predict_proba(X_test)[:, 1]
+
+        print("  Finding best decision threshold (F-beta) ...")
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        print(f"  Best threshold: {best_threshold:.4f}")
+
+        y_pred = (y_proba >= best_threshold).astype(int)
+        model_to_save = best_model
+    else:
+        _banner(8, TOTAL, "XGBOOST TRAINING")
+        print("  Training final XGBoost on top-gain features ...")
+        bst = train_xgboost(
+            X_train,
+            y_train,
+            X_test,
+            y_test,
+            sample_weight_train=sw_train,
+        )
+        print("  Generating predictions on test set ...")
+        import xgboost as xgb
+        dtest = xgb.DMatrix(X_test)
+        y_proba = bst.predict(dtest)
+
+        print("  Finding best decision threshold (F-beta) ...")
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        print(f"  Best threshold: {best_threshold:.4f}")
+
+        y_pred = (y_proba >= best_threshold).astype(int)
+        model_to_save = bst
+
+    # ------------------------------------------------------------------
+    _banner(10, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
     metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
     report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH)
@@ -283,8 +337,11 @@ def run_training_pipeline(tune: bool = False, sample: bool = False, selected_fea
     scores_df.to_csv(config.SCORES_PATH, index=False)
     print(f"  Risk scores saved to {config.SCORES_PATH}")
 
-    # Save best_threshold inside artifacts so scoring uses the same cutoff
-    save_model(model_to_save, {**artifacts, "best_threshold": best_threshold})
+    # Save best_threshold + selected feature list inside artifacts
+    save_model(
+        model_to_save,
+        {**artifacts, "best_threshold": best_threshold, "selected_features": selected_features},
+    )
 
     print()
     print("=" * 60)
