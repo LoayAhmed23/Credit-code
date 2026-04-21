@@ -71,6 +71,10 @@ def tune_hyperparameters(X_train, y_train):
 
     scorer = make_scorer(roc_auc_score, needs_proba=True)
 
+    # Use the number of available cores for faster Parallel CV tuning.
+    import multiprocessing
+    n_cores = multiprocessing.cpu_count()
+
     search = RandomizedSearchCV(
         estimator=model,
         param_distributions=config.TUNE_PARAM_GRID,  
@@ -79,7 +83,7 @@ def tune_hyperparameters(X_train, y_train):
         cv=config.TUNE_CV_FOLDS,
         verbose=2,
         random_state=config.RANDOM_STATE,
-        n_jobs=-1, # Parallelize cross-validation folds
+        n_jobs=config.n_gpus, # Parallelize cross-validation folds across GPUs, not CPUs to avoid OOM
     )
 
     print(

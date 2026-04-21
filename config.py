@@ -4,6 +4,8 @@ All paths, column names, hyperparameters, and constants live here.
 """
 
 import os
+import multiprocessing
+import subprocess
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -117,6 +119,7 @@ DROP_COLS = [
 
     # --- Pipeline artefact ---
     "sample_weight",
+    "target",
 ]
 
 # ---------------------------------------------------------------------------
@@ -140,11 +143,20 @@ RANDOM_STATE = 42
 TEST_SIZE = 0.3
 
 # Default XGBoost params
+n_cores = multiprocessing.cpu_count()
+
+# Try to detect GPUs
+try:
+    n_gpus = int(subprocess.check_output('nvidia-smi --list-gpus | wc -l', shell=True))
+except Exception:
+    n_gpus = 1
+
 XGB_PARAMS = {
     "objective": "binary:logistic",
     "eval_metric": "auc",
     "tree_method": "hist",
     "device": "cuda",
+    "nthread": n_cores, # Force to use all CPU cores for preprocessing histograms before sending to GPU
     "learning_rate": 0.05,
     "max_depth": 5,
     "colsample_bytree": 0.8,

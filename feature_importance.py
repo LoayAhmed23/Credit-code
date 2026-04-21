@@ -8,19 +8,17 @@ import joblib
 
 sys.path.append(os.path.abspath('.'))
 
-from pipeline import run_training_pipeline
 import config
 
 def plot_feature_importance():
     sns.set_theme(style="whitegrid")
     plt.rcParams["figure.figsize"] = (12, 10)
 
-    print("Starting XGBoost pipeline on 25% stratified partition...")
-    metrics = run_training_pipeline(tune=False, sample=True)
-    print("\n--- Pipeline Finished. Model saved explicitly ---")
+    # Note: We no longer run the pipeline from here to avoid circular imports.
+    # The pipeline will simply call this function after it finishes and saves the model.
 
     try:
-        pipeline_data = joblib.load(config.MODEL_PATH)
+        pipeline_data = joblib.load(config.MODEL_PATH)  
         model = pipeline_data["model"]
         artifacts = pipeline_data["artifacts"]
         print("Loaded model and artifacts successfully.")
