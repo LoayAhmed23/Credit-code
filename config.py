@@ -139,17 +139,18 @@ DATE_COLS_TXN = ["POST DATE", "TRXN DATE"]
 RANDOM_STATE = 42
 TEST_SIZE = 0.3
 
+# Default XGBoost params
 XGB_PARAMS = {
     "objective": "binary:logistic",
     "eval_metric": "auc",
+    "tree_method": "hist",
+    "device": "cuda",
     "learning_rate": 0.05,
     "max_depth": 5,
     "colsample_bytree": 0.8,
     "subsample": 0.8,
-    "random_state": RANDOM_STATE,
-    "n_jobs": -1,
-    "tree_method": "hist",
-    "device": "cuda",
+    "seed": RANDOM_STATE,
+    "max_bin": 64,
 }
 
 NUM_BOOST_ROUND = 1000
@@ -161,12 +162,10 @@ EARLY_STOPPING_ROUNDS = 50
 TUNE_N_ITER = 20
 TUNE_CV_FOLDS = 3
 
-# IMPORTANT: prefix must match the pipeline step name "model", not "classifier"
+# XGBoost hyperparameters for tuning
 TUNE_PARAM_GRID = {
-    "model__max_depth":        [3, 5, 7],
-    "model__learning_rate":    [0.01, 0.05, 0.1],    
-    "model__colsample_bytree": [0.6, 0.8, 1.0],      
-    "model__subsample":        [0.6, 0.8, 1.0],      
-    "model__tree_method":      ["hist"],
-    "model__device":           ["cuda"],
+    "max_depth":        [3, 5, 7],
+    "learning_rate":    [0.01, 0.05, 0.1],    
+    "colsample_bytree": [0.6, 0.8, 1.0],      
+    "subsample":        [0.6, 0.8, 1.0],      
 }

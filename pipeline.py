@@ -19,7 +19,7 @@ from feature_engineering import (
     create_target,
 )
 from preprocessing import preprocess
-from model import apply_smote, train_xgboost, tune_hyperparameters, save_model, load_model
+from model import train_xgboost, tune_hyperparameters, save_model, load_model
 from evaluation import evaluate, generate_report, find_best_threshold_fbeta
 from feature_importance import plot_feature_importance
 
@@ -209,7 +209,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     if tune:
         _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
     else:
-        _banner(8, TOTAL, "SMOTE RESAMPLING + XGBOOST TRAINING")
+        _banner(8, TOTAL, "XGBOOST TRAINING")
     # ------------------------------------------------------------------
 
     if tune:
@@ -225,17 +225,15 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = best_model
 
     else:
-        X_train_res, y_train_res = apply_smote(X_train, y_train)
-        # sample_weight rows don't map to SMOTE synthetic rows, so we
-        # pass None here ظ¤ SMOTE already balances the class distribution.
-        print("  Training XGBoost with early stopping ...")
+        print("  Training XGBoost with early stopping and automatic scale_pos_weight ...")
         bst = train_xgboost(
-            X_train_res, y_train_res,
+            X_train, y_train,
             X_test, y_test,
-            sample_weight_train=None,
         )
         print("  Generating predictions on test set ...")
-        y_proba = bst.predict_proba(X_test, iteration_range=(0, bst.best_iteration + 1))[:, 1]
+        import xgboost as xgb
+        dtest = xgb.DMatrix(X_test)
+        y_proba = bst.predict(dtest)
 
         print("  Finding best decision threshold (F-beta) ...")
         best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
@@ -255,7 +253,9 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     if tune:
         all_proba = best_model.predict_proba(X)[:, 1]
     else:
-        all_proba = bst.predict_proba(X, iteration_range=(0, bst.best_iteration + 1))[:, 1]
+        import xgboost as xgb
+        dall = xgb.DMatrix(X)
+        all_proba = bst.predict(dall)
     all_pred = (all_proba >= best_threshold).astype(int)
 
     scores_df = pd.DataFrame({
@@ -286,10 +286,10 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 # Scoring pipeline (new data)
 # ---------------------------------------------------------------------------
 
-def run_scoring_pipeline(model_path: str = None,
-                         prime_dir:   str = None,
-                         txn_dir:     str = None,
-                         output_path: str = None):
+def run_scoring_pipeline(model_path: str = None,     
+                         prime_dir:   str = None,    
+                         txn_dir:     str = None,    
+                         output_path: str = None):   
     """Score new monthly data using a previously trained model."""
     TOTAL = 5
     _ensure_output_dir()
@@ -319,13 +319,13 @@ def run_scoring_pipeline(model_path: str = None,
 
     _banner(5, TOTAL, "SCORING")
     print(f"  Scoring {len(X):,} card accounts ...") 
+    
+    import xgboost as xgb
     if hasattr(model, "predict_proba"):
-        try:
-            proba = model.predict_proba(X, iteration_range=(0, model.best_iteration + 1))[:, 1]
-        except (TypeError, AttributeError):
-            proba = model.predict_proba(X)[:, 1]
+        proba = model.predict_proba(X)[:, 1]
     else:
-        proba = model.predict(X, iteration_range=(0, model.best_iteration + 1))
+        dmatrix = xgb.DMatrix(X)
+        proba = model.predict(dmatrix)
 
     pred = (proba >= best_threshold).astype(int)     
 

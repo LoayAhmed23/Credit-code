@@ -1,14 +1,10 @@
 """
-Model training, SMOTE resampling, hyperparameter tuning, and persistence.
+Model training, hyperparameter tuning, and persistence.
 """
 
 import numpy as np
 import xgboost as xgb
-import matplotlib.pyplot as plt
-import os
 import joblib
-from imblearn.over_sampling import SMOTE
-from imblearn.pipeline import Pipeline as ImbPipeline
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import make_scorer, roc_auc_score
 
@@ -19,32 +15,34 @@ import config
 # Training
 # ---------------------------------------------------------------------------
 
-def train_xgboost(X_train, y_train, X_val, y_val,   
-                   params=None, sample_weight_train=None):
-    """Train an XGBoost model with early stopping.   
+def train_xgboost(X_train, y_train, X_val, y_val, params=None, sample_weight_train=None):
+    """Train an XGBoost model with early stopping.
 
     Returns the trained Booster.
     """
     params = params or config.XGB_PARAMS
 
-    # XGBoost scikit-learn API seamlessly integrates with native DMatrix backend internally
-    # and provides better GridSearchCV synergy than the native training API block
-    clf = xgb.XGBClassifier(
-        n_estimators=config.NUM_BOOST_ROUND,
+    # Automatic scale_pos_weight calculation if not provided
+    if "scale_pos_weight" not in params:
+        num_neg = (y_train == 0).sum()
+        num_pos = (y_train == 1).sum()
+        params["scale_pos_weight"] = num_neg / num_pos if num_pos > 0 else 1.0
+
+    xgb_train = xgb.DMatrix(X_train, label=y_train, weight=sample_weight_train)
+    xgb_val   = xgb.DMatrix(X_val,   label=y_val)
+
+    bst = xgb.train(
+        params,
+        xgb_train,
+        num_boost_round=config.NUM_BOOST_ROUND,      
+        evals=[(xgb_train, "train"), (xgb_val, "valid")],
         early_stopping_rounds=config.EARLY_STOPPING_ROUNDS,
-        **params
+        verbose_eval=10,
     )
     
-    clf.fit(
-        X_train, y_train,
-        eval_set=[(X_train, y_train), (X_val, y_val)],
-        sample_weight=sample_weight_train,
-        verbose=10
-    )
-    
-    best_auc = clf.best_score
-    print(f"  Best iteration: {clf.best_iteration}  |  Best valid AUC: {best_auc}")
-    return clf
+    best_auc = bst.best_score
+    print(f"  Best iteration: {bst.best_iteration}  |  Best valid AUC: {best_auc}")
+    return bst
 
 
 # ---------------------------------------------------------------------------
@@ -52,40 +50,36 @@ def train_xgboost(X_train, y_train, X_val, y_val,
 # ---------------------------------------------------------------------------
 
 def tune_hyperparameters(X_train, y_train):
-    """Run RandomizedSearchCV over a SMOTE + XGBoost pipeline.
+    """Run RandomizedSearchCV over XGBoost.
 
     Returns (best_estimator, best_params).
     """
-    pipeline = ImbPipeline(
-        steps=[
-            ("smote", SMOTE(random_state=config.RANDOM_STATE)),
-            (
-                "model",                          # step name is "model"
-                xgb.XGBClassifier(
-                    objective="binary:logistic",
-                    eval_metric="auc",
-                    tree_method="hist",
-                    device="cuda",
-                    random_state=config.RANDOM_STATE,
-                ),
-            ),
-        ]
+
+    # Automatic scale_pos_weight calculation
+    num_neg = (y_train == 0).sum()
+    num_pos = (y_train == 1).sum()
+    scale_pos_weight = num_neg / num_pos if num_pos > 0 else 1.0
+
+    model = xgb.XGBClassifier(
+        objective="binary:logistic",
+        eval_metric="auc",
+        tree_method="hist",
+        device="cuda",
+        random_state=config.RANDOM_STATE,
+        scale_pos_weight=scale_pos_weight
     )
 
     scorer = make_scorer(roc_auc_score, needs_proba=True)
 
-    # Convert parameter grid to avoid model__ prefix since we don't have pipeline
-    param_grid = {k.replace("model__", ""): v for k, v in config.TUNE_PARAM_GRID.items()}
-
     search = RandomizedSearchCV(
-        pipeline,
-        param_distributions=param_grid,
+        estimator=model,
+        param_distributions=config.TUNE_PARAM_GRID,  
         n_iter=config.TUNE_N_ITER,
         scoring=scorer,
         cv=config.TUNE_CV_FOLDS,
         verbose=2,
         random_state=config.RANDOM_STATE,
-        n_jobs=-1,
+        n_jobs=-1, # Parallelize cross-validation folds
     )
 
     print(
