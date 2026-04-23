@@ -1,8 +1,10 @@
 """
 Data loading utilities.
-Reads monthly CSVs from prime_data/ and transaction XLSX files from
-transaction_data/, enforces dtypes, cleans numeric strings, parses dates,
-and provides a merge helper.
+Reads monthly CSVs from prime/ and transaction/ directories,
+enforces dtypes via vectorised casting, cleans columns, and provides
+a merge helper.
+
+Preprocessing approach adapted from data_to_to_apply.py.
 """
 
 import glob
@@ -15,29 +17,104 @@ import config
 
 
 # ---------------------------------------------------------------------------
-# Helpers for parsing messy numeric strings (e.g. "1,234.00")
+# Vectorised cast-and-report (from data_to_to_apply.py)
 # ---------------------------------------------------------------------------
 
-def _parse_int(x):
-    if pd.isna(x):
-        return pd.NA
-    x_clean = str(x).strip().replace(",", "")
-    if x_clean.endswith(".00"):
-        x_clean = x_clean[:-3]
-    try:
-        return int(x_clean)
-    except ValueError:
-        return np.nan
+def apply_cast_and_report(df: pd.DataFrame, columns: list, cast_type: str):
+    """Cast *columns* to *cast_type* in-place and report null changes.
+
+    Supported cast_type values: 'string', 'float', 'int', 'date'.
+    """
+    total_rows = len(df)
+
+    for col in columns:
+        if col not in df.columns:
+            print(f"Warning: Column '{col}' not found in dataframe. Skipping.")
+            continue
+
+        nulls_before = df[col].isna().sum()
+
+        if cast_type == "string":
+            df[col] = df[col].astype("string")
+
+        elif cast_type == "float":
+            df[col] = df[col].astype(str).str.replace(",", "", regex=False)
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        elif cast_type == "int":
+            df[col] = df[col].astype(str).str.replace(",", "", regex=False)
+            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+        elif cast_type == "date":
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+        nulls_after = df[col].isna().sum()
+        pct_missing = (nulls_after / total_rows) * 100
+        print(
+            f"[{col}] Type: {df[col].dtype} | "
+            f"Nulls: {nulls_before} -> {nulls_after} ({pct_missing:.2f}% missing)"
+        )
 
 
-def _parse_float(x):
-    if pd.isna(x):
-        return np.nan
-    x_clean = str(x).strip().replace(",", "")
-    try:
-        return float(x_clean)
-    except ValueError:
-        return np.nan
+def drop_empty_records(df: pd.DataFrame, columns):
+    """Drop rows missing data in *columns* and print a summary."""
+    if isinstance(columns, str):
+        columns = [columns]
+
+    valid_cols = [col for col in columns if col in df.columns]
+    if not valid_cols:
+        print(f"\nWarning: None of {columns} exist in the dataframe. No rows dropped.")
+        return df
+
+    rows_before = len(df)
+    cleaned_df = df.dropna(subset=valid_cols, how="any")
+    rows_after = len(cleaned_df)
+
+    print(f"\n--- Dropping Empty Records ---")
+    print(f"Checked columns: {valid_cols}")
+    print(f"Dropped {rows_before - rows_after} rows.")
+    print(f"Total rows remaining: {rows_after}")
+
+    return cleaned_df
+
+
+# ---------------------------------------------------------------------------
+# Column-type definitions (from data_to_to_apply.py)
+# ---------------------------------------------------------------------------
+
+PRIME_STRING_COLS = [
+    "BRANCH_NAME", "ACTIVATED", "STATUS", "STATUS_NAME",
+    "PRODUCT_NAME", "GENDER", "CUSTOMER_TYPE", "Card account status ",
+]
+PRIME_INT_COLS = ["BRANCH_ID", "RIMNO"]
+PRIME_FLOAT_COLS = [
+    "CREDIT_LIMIT", "DELIQUENCY", "LEDGER_BALANCE", "AVAILABLE_LIMIT",
+    "OVERDUEAMOUNT", "FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD",
+    "THIRD_REPLACED_CARD", "SETTLEMENT AMT",
+]
+PRIME_DATE_COLS = [
+    "CREATION_DATE", "LAST_STAEMENT_DATE", "LAST_PAYMENT_DATE",
+    "DOB", "CLOSURE_DATE",
+]
+
+PRIME_COLUMNS_TO_DROP = [
+    "MAPPING_ACCNO", "MIN_PAYMENT", "OVER_LIMIT", "TOTAL_HOLD",
+    "ORGANIZATION", "JOINING_FEE", "ANNUAL_FEE",
+    "LAST_PAYMENT_AMOUNT", "LAST_PAYMENT_DATE", "SETTLEMENT AMT",
+]
+
+TXN_STRING_COLS = [
+    "DESCRIPTION", "MERCHNAME", "MERCH ID", "SOURCES",
+    "BANKBRANCH", "TRXN COUNTRY", "REVERSAL FLAG", "PRODUCT_NAME",
+]
+TXN_INT_COLS = ["RIMNO", "CCY", "MCC", "SETTLEMENT CCY"]
+TXN_FLOAT_COLS = ["ORIG AMOUNT", "EMBEDDED _FEE", "BILLING AMT", "SETTLEMENT AMT"]
+TXN_DATE_COLS = ["TRXN DATE", "POST DATE"]
+
+TXN_COLUMNS_TO_DROP = [
+    "POST DATE", "ORIG AMOUNT", "EMBEDDED _FEE",
+    "SETTLEMENT AMT", "SETTLEMENT CCY", "SOURCES",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -47,68 +124,52 @@ def _parse_float(x):
 def load_prime_data(data_dir: str = None) -> pd.DataFrame:
     """Load and concatenate all CSV files from the prime data directory.
 
-    - Reads with latin encoding and forces string dtypes on columns that
-      contain commas or mixed types.
-    - Renames ``RIM_NO:`` -> ``RIMNO``.
-    - Parses numeric strings via _parse_int / _parse_float.
-    - Drops columns not present in the current schema.
+    Uses the casting approach from data_to_to_apply.py:
+    - Reads every column as string initially
+    - Applies vectorised casting via apply_cast_and_report
+    - Drops unnecessary columns
+    - Drops rows with missing RIMNO
     """
     data_dir = data_dir or config.PRIME_DATA_DIR
     files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
     if not files:
         raise FileNotFoundError(f"No CSV files found in {data_dir}")
 
-    # Build dtype dict: read numeric-ish cols as string so we can clean them
-    str_dtype = {
-        col: "string"
-        for col in (config.PRIME_STRING_COLS
-                    + config.PRIME_INT_COLS
-                    + config.PRIME_FLOAT_COLS)
-    }
+    all_str_cols = PRIME_STRING_COLS + PRIME_INT_COLS + PRIME_FLOAT_COLS
+    str_dtype = {col: "string" for col in all_str_cols}
 
     frames = []
-    def _read_csv_safe(f):
-        # Read headers first to check if dates exist
-        headers = pd.read_csv(f, nrows=0, encoding="latin").columns.tolist()
-        parse_dates = [c for c in config.DATE_COLS_PRIME if c in headers]
-        return pd.read_csv(
+    print("Loading prime CSV files...")
+    for f in files:
+        df = pd.read_csv(
             f,
             encoding="latin",
             dtype=str_dtype,
-            parse_dates=parse_dates,
-        )
-
-    for f in files:
-        df = _read_csv_safe(f)
+            parse_dates=PRIME_DATE_COLS,
+        ).rename(columns={"RIM_NO": "RIMNO", "NAME": "PRODUCT_NAME"})
         df["source_file"] = os.path.basename(f)
         frames.append(df)
     combined = pd.concat(frames, ignore_index=True)
 
-    # Rename customer ID column (raw data may have "RIM_NO:" or "RIM_NO")
-    if "RIM_NO" in combined.columns:
-        combined = combined.rename(columns={"RIM_NO": "RIMNO"})
+    # --- Casting & reporting ---
+    print("\n--- Casting Prime Columns and Checking Nulls ---")
+    print("\n-> String Columns:")
+    apply_cast_and_report(combined, PRIME_STRING_COLS, "string")
+    print("\n-> Float Columns:")
+    apply_cast_and_report(combined, PRIME_FLOAT_COLS, "float")
+    print("\n-> Integer Columns:")
+    apply_cast_and_report(combined, PRIME_INT_COLS, "int")
+    print("\n-> Date Columns:")
+    apply_cast_and_report(combined, PRIME_DATE_COLS, "date")
 
-    # Parse float columns (remove commas, cast)
-    for col in config.PRIME_FLOAT_COLS:
-        if col in combined.columns:
-            combined[col] = combined[col].apply(_parse_float)
+    # --- Drop unnecessary columns ---
+    existing_drop = [c for c in PRIME_COLUMNS_TO_DROP if c in combined.columns]
+    combined = combined.drop(columns=existing_drop)
 
-    # Parse int columns
-    for col in config.PRIME_INT_COLS:
-        if col in combined.columns:
-            combined[col] = combined[col].apply(_parse_int)
+    # --- Drop rows with missing RIMNO ---
+    combined = drop_empty_records(combined, ["RIMNO"])
 
-    # Drop columns that no longer exist in the schema
-    for col in ["MAPPING_ACCNO", "MIN_PAYMENT", "OVER_LIMIT"]:
-        if col in combined.columns:
-            combined = combined.drop(columns=[col])
-
-    # Re-parse date columns that may not have been auto-parsed
-    for col in config.DATE_COLS_PRIME:
-        if col in combined.columns and not pd.api.types.is_datetime64_any_dtype(combined[col]):
-            combined[col] = pd.to_datetime(combined[col], errors="coerce")
-
-    print(f"[data_loader] Loaded {len(files)} prime file(s) -> {combined.shape}")
+    print(f"\n[data_loader] Loaded {len(files)} prime file(s) -> {combined.shape}")
     return combined
 
 
@@ -117,31 +178,82 @@ def load_prime_data(data_dir: str = None) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def load_transaction_data(data_dir: str = None) -> pd.DataFrame:
-    """Load and concatenate all XLSX files from the transaction data directory.
+    """Load and concatenate all CSV files from the transaction data directory.
 
-    - Reads with latin encoding, forces string dtypes on text columns.
-    - Parses date columns.
+    Uses the casting approach from data_to_to_apply.py.
     """
     data_dir = data_dir or config.TRANSACTION_DATA_DIR
-    files = sorted(glob.glob(os.path.join(data_dir, "*.xlsx")))
+    # Support both CSV and XLSX; prefer CSV
+    csv_files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
+    xlsx_files = sorted(glob.glob(os.path.join(data_dir, "*.xlsx")))
+    files = csv_files or xlsx_files
     if not files:
-        raise FileNotFoundError(f"No XLSX files found in {data_dir}")
+        raise FileNotFoundError(
+            f"No CSV or XLSX files found in {data_dir}"
+        )
 
-    str_dtype = {col: "string" for col in config.TXN_STRING_COLS}
+    all_str_cols = TXN_STRING_COLS + TXN_INT_COLS + TXN_FLOAT_COLS
+    str_dtype = {col: "string" for col in all_str_cols}
 
     frames = []
+    print("\nLoading Transaction files...")
     for f in files:
-        df = pd.read_excel(f, dtype=str_dtype)
+        if f.endswith(".csv"):
+            df = pd.read_csv(
+                f,
+                encoding="latin",
+                dtype=str_dtype,
+                parse_dates=TXN_DATE_COLS,
+            )
+        else:
+            df = pd.read_excel(f, dtype=str_dtype)
         frames.append(df)
     combined = pd.concat(frames, ignore_index=True)
 
-    # Parse date columns
-    for col in config.DATE_COLS_TXN:
-        if col in combined.columns and not pd.api.types.is_datetime64_any_dtype(combined[col]):
-            combined[col] = pd.to_datetime(combined[col], errors="coerce")
+    # --- Casting & reporting ---
+    print("\n--- Casting Transaction Columns and Checking Nulls ---")
+    print("\n-> Transaction String Columns:")
+    apply_cast_and_report(combined, TXN_STRING_COLS, "string")
+    print("\n-> Transaction Float Columns:")
+    apply_cast_and_report(combined, TXN_FLOAT_COLS, "float")
+    print("\n-> Transaction Integer Columns:")
+    apply_cast_and_report(combined, TXN_INT_COLS, "int")
+    print("\n-> Transaction Date Columns:")
+    apply_cast_and_report(combined, TXN_DATE_COLS, "date")
 
-    print(f"[data_loader] Loaded {len(files)} transaction file(s) -> {combined.shape}")
+    # --- Drop unnecessary columns ---
+    existing_drop = [c for c in TXN_COLUMNS_TO_DROP if c in combined.columns]
+    combined = combined.drop(columns=existing_drop)
+
+    print(f"\n[data_loader] Loaded {len(files)} transaction file(s) -> {combined.shape}")
     return combined
+
+
+# ---------------------------------------------------------------------------
+# Filter: keep only RIMNOs that have transactions
+# ---------------------------------------------------------------------------
+
+def filter_rimno_with_transactions(
+    prime_df: pd.DataFrame,
+    txn_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Remove rows from *prime_df* whose RIMNO has zero transactions.
+
+    This ensures the model only trains on / scores customers that have
+    observable transaction behaviour.
+    """
+    cid = config.CUSTOMER_ID
+    rimno_with_txn = txn_df[cid].dropna().unique()
+
+    before = len(prime_df)
+    prime_df = prime_df[prime_df[cid].isin(rimno_with_txn)]
+    after = len(prime_df)
+
+    print(
+        f"[data_loader] Filtered RIMNOs with no transactions: "
+        f"dropped {before - after} rows, {after} remaining."
+    )
+    return prime_df
 
 
 # ---------------------------------------------------------------------------

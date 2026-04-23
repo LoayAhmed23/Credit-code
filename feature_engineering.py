@@ -1,21 +1,29 @@
 """
 Feature engineering for prime (customer snapshot) and transaction data.
-Includes data cleaning steps (fill-na, outlier capping) derived from
-the bank's actual data quirks.
+Preprocessing approach adapted from data_to_to_apply.py.
+
+Includes:
+- Missing-value imputation with indicator flags (DOB, LAST_STAEMENT_DATE)
+- Account tenure, customer age, card replacement frequency
+- Product cross-tabulation (multi-hot product ownership)
+- RFM transaction features (recency, frequency, monetary)
+- MCC-level spend pivot
+- Foreign transaction features
+- Age & credit-limit banding with one-hot encoding
+- StandardScaler on float columns
+- Final NaN filling (median for numeric, mode for categorical)
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 import config
 
 # ---------------------------------------------------------------------------
 # Columns that directly encode the target and must never become features.
-# This list is checked at the end of engineering as a safety net — the
-# primary removal happens via DROP_COLS in preprocessing, but an explicit
-# guard here catches bugs earlier and gives a clearer error message.
 # ---------------------------------------------------------------------------
 _LEAKAGE_COLS = {
     "STATUS", "STATUS_NAME", "DELINQUENCY",
@@ -25,253 +33,236 @@ _LEAKAGE_COLS = {
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _get_numeric(df: pd.DataFrame, *col_names: str, default: float = 0.0) -> pd.Series:
-    """Return the first matching column as a numeric Series, or a zero Series."""
-    for col in col_names:
-        if col in df.columns:
-            return pd.to_numeric(df[col], errors="coerce").fillna(default)
-    return pd.Series(default, index=df.index, dtype=float)
-
-
-def _assert_no_leakage(df: pd.DataFrame, stage: str) -> None:
-    """Raise if any known leakage column survived into the feature DataFrame."""
-    found = _LEAKAGE_COLS.intersection(df.columns)
-    if found:
-        raise ValueError(
-            f"[leakage] The following columns must be dropped before '{stage}' "
-            f"but are still present: {sorted(found)}\n"
-            f"Add them to config.DROP_COLS and re-run."
-        )
-
-
-# ---------------------------------------------------------------------------
 # Prime features
 # ---------------------------------------------------------------------------
 
-def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Derive features from the prime (customer snapshot) data."""
-    df = df.copy()
+def engineer_prime_features(
+    prime_df: pd.DataFrame,
+    txn_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Derive all features from the prime snapshot *and* transaction data.
+
+    This replaces both the old ``engineer_prime_features`` and
+    ``engineer_transaction_features`` — all enrichment happens in one place
+    so we can merge transaction-derived signals (last-statement fallback,
+    RFM, MCC spend, foreign-txn ratio, etc.) directly.
+
+    Parameters
+    ----------
+    prime_df : pd.DataFrame
+        Raw prime data (after loading / casting / column-dropping).
+    txn_df : pd.DataFrame
+        Raw transaction data (after loading / casting / column-dropping).
+
+    Returns
+    -------
+    pd.DataFrame
+        Enriched prime DataFrame ready for target creation + preprocessing.
+    """
+    df = prime_df.copy()
     extraction_date = pd.to_datetime("today")
+    cid = config.CUSTOMER_ID
 
-    # --- Fill known missing-value patterns ---
-    if "GENDER" in df.columns:
-        df["GENDER"] = df["GENDER"].fillna("Unknown")
+    # ── 1. Fill known missing-value patterns ──────────────────────────
+    df["GENDER"] = df["GENDER"].fillna("Unknown")
 
-    if "ANNUAL_FEE" in df.columns:
-        df["ANNUAL_FEE"] = pd.to_numeric(df["ANNUAL_FEE"], errors="coerce")
-        df["ANNUAL_FEE"] = df["ANNUAL_FEE"].fillna(df["ANNUAL_FEE"].median())
+    # DOB: flag + median impute
+    df["DOB_IS_MISSING"] = df["DOB"].isna().astype(int)
+    if "DOB" in df.columns and not df["DOB"].dropna().empty:
+        median_dob_int = df["DOB"].dropna().astype("int64").median()
+        median_dob = pd.to_datetime(median_dob_int)
+        df["DOB"] = df["DOB"].fillna(median_dob)
 
-    if "JOINING_FEE" in df.columns:
-        df["JOINING_FEE"] = pd.to_numeric(df["JOINING_FEE"], errors="coerce")
+    # LAST_STAEMENT_DATE: flag + fill from last txn date, then CREATION_DATE
+    df["LAST_STAEMENT_IS_MISSING"] = df["LAST_STAEMENT_DATE"].isna().astype(int) \
+        if "LAST_STAEMENT_DATE" in df.columns else 0
+    if "LAST_STAEMENT_DATE" in df.columns:
+        latest_txns = txn_df.groupby(cid)["TRXN DATE"].max()
+        df["LAST_STAEMENT_DATE"] = df["LAST_STAEMENT_DATE"].fillna(
+            df[cid].map(latest_txns)
+        )
+        df["LAST_STAEMENT_DATE"] = df["LAST_STAEMENT_DATE"].fillna(
+            df["CREATION_DATE"]
+        )
 
-    # --- Outlier capping (p99.9) for overdue amount ---
-    overdue_col = "OVERDUEAMOUNT" if "OVERDUEAMOUNT" in df.columns else "OVERDUE_AMOUNT"
-    if overdue_col in df.columns:
-        p99 = df[overdue_col].quantile(0.999)
-        print(f"[feature_eng] Overdue outliers capped at {p99:.2f}: "
-              f"{(df[overdue_col] > p99).sum()} rows")
-        df[overdue_col] = df[overdue_col].clip(upper=p99)
+    # Transaction categorical fills
+    txn_df = txn_df.copy()
+    txn_df["MERCHNAME"]     = txn_df["MERCHNAME"].fillna("UNKNOWN")
+    txn_df["BANKBRANCH"]    = txn_df["BANKBRANCH"].fillna("UNKNOWN")
+    txn_df["TRXN COUNTRY"]  = txn_df["TRXN COUNTRY"].fillna("UNKNOWN")
 
-    # --- Core numeric references (accept both naming conventions) ---
-    credit_limit    = _get_numeric(df, "CREDIT_LIMIT")
-    available_limit = _get_numeric(df, "AVAILABLE_LIMIT")
-    ledger          = _get_numeric(df, "LEDGER_BALANCE")
-    overdue         = _get_numeric(df, "OVERDUEAMOUNT", "OVERDUE_AMOUNT")
-    total_hold      = _get_numeric(df, "TOTAL_HOLD")
-    last_payment    = _get_numeric(df, "LAST_PAYMENT_AMOUNT")
-    min_payment     = _get_numeric(df, "MIN_PAYMENT", "MIN_PAYMENT_AMOUNT")
-    over_limit_raw  = _get_numeric(df, "OVER_LIMIT")
+    # ── 2. Temporal features ──────────────────────────────────────────
+    if "CREATION_DATE" in df.columns:
+        df["ACCOUNT_TENURE_MONTHS"] = (
+            (extraction_date - df["CREATION_DATE"]).dt.days / 30
+        )
 
-    credit_limit_safe = credit_limit.replace(0, np.nan)
-    min_payment_safe  = min_payment.replace(0, np.nan)
+    # NOTE: TIME_TO_CHURN_DAYS intentionally omitted — it relies on
+    # CLOSURE_DATE which is a leakage source (non-null only for
+    # closed/defaulted accounts) and is therefore incorrect.
 
-    # --- Utilization ratios ---
-    df["utilization_ratio"]      = (ledger / credit_limit_safe).fillna(0)
-    df["utilization_with_hold"]  = ((ledger + total_hold) / credit_limit_safe).fillna(0)
-    df["available_credit_ratio"] = (available_limit / credit_limit_safe).fillna(0)
-
-    # --- Over-limit ratio ---
-    # Use the dedicated column if it exists; otherwise derive it.
-    if "OVER_LIMIT" in df.columns:
-        over_limit_val = over_limit_raw
-    else:
-        over_limit_val = (ledger - credit_limit).clip(lower=0)
-    df["over_limit_ratio"] = (over_limit_val / credit_limit_safe).fillna(0)
-
-    # --- Overdue ratio ---
-    # NOTE: we do NOT create an "overdue_severity" alias — it was identical
-    # to overdue_ratio and the duplicate confused feature importance charts.
-    df["overdue_ratio"] = (overdue / credit_limit_safe).fillna(0)
-
-    # --- Payment coverage (>1 = paid more than minimum, <1 = underpaying) ---
-    df["payment_coverage"] = (last_payment / min_payment_safe).fillna(-1)
-
-    # --- Composite financial stress score ---
-    # Weights reflect increasing severity: utilization < over-limit < overdue.
-    df["financial_stress_score"] = (
-        df["utilization_ratio"]
-        + df["over_limit_ratio"] * 2
-        + df["overdue_ratio"]    * 3
+    # ── 3. Days since last transaction (recency from txn data) ────────
+    txn_recency = txn_df.groupby(cid)["TRXN DATE"].max().reset_index()
+    txn_recency["DAYS_SINCE_LAST_TXN"] = (
+        extraction_date - txn_recency["TRXN DATE"]
+    ).dt.days
+    df = df.merge(
+        txn_recency[[cid, "DAYS_SINCE_LAST_TXN"]],
+        on=cid, how="left",
     )
 
-    # --- Fee-to-limit ratio ---
-    joining_fee = _get_numeric(df, "JOINING_FEE")
-    annual_fee  = _get_numeric(df, "ANNUAL_FEE")
-    df["fee_to_limit_ratio"] = ((joining_fee + annual_fee) / credit_limit_safe).fillna(0)
+    # ── 4. Card replacement frequency ────────────────────────────────
+    rep_cols = ["FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD", "THIRD_REPLACED_CARD"]
+    existing_rep = [c for c in rep_cols if c in df.columns]
+    if existing_rep:
+        df["CARD_REPLACEMENT_FREQ"] = df[existing_rep].sum(axis=1)
 
-    # --- Card replacement count ---
-    replacement_cols = [
-        "FIRST_REPLACED_CARD", "SECOND_REPLACED_CARD", "THIRD_REPLACED_CARD",
-    ]
-    existing_rep = [c for c in replacement_cols if c in df.columns]
-    df["card_replacements"] = df[existing_rep].notna().sum(axis=1) if existing_rep else 0
+    # ── 5. Product cross-tabulation ──────────────────────────────────
+    if "PRODUCT_NAME" in df.columns:
+        Product_frequency_threshold = 500
+        prime_counts = df["PRODUCT_NAME"].value_counts()
+        df["PRODUCT_NAME"] = df["PRODUCT_NAME"].map(
+            lambda x: x if prime_counts.get(x, 0) >= Product_frequency_threshold
+            else "another product"
+        )
 
-    # --- Account tenure (months since creation) ---
-    if "CREATION_DATE" in df.columns:
-        df["account_tenure_months"] = (
-            (extraction_date - df["CREATION_DATE"]).dt.days / 30
-        ).fillna(0).clip(lower=0)
+        user_item_matrix = pd.crosstab(df[cid], df["PRODUCT_NAME"])
+        user_item_matrix.columns = [
+            f"HAS_PROD_{col.strip().replace(' ', '_')}"
+            for col in user_item_matrix.columns
+        ]
+        df = (
+            df.drop_duplicates(subset=[cid])
+              .merge(user_item_matrix, on=cid, how="left")
+        )
+
+    # Also threshold PRODUCT_NAME in transactions
+    if "PRODUCT_NAME" in txn_df.columns:
+        txn_prod_counts = txn_df["PRODUCT_NAME"].value_counts()
+        txn_df["PRODUCT_NAME"] = txn_df["PRODUCT_NAME"].map(
+            lambda x: x if txn_prod_counts.get(x, 0) >= 500
+            else "another product"
+        )
+
+    # ── 6. RFM features (Recency, Frequency, Monetary) ───────────────
+    rfm_features = txn_df.groupby(cid).agg(
+        TOTAL_SPEND_AMT=("BILLING AMT", "sum"),
+        AVG_TRXN_AMT=("BILLING AMT", "mean"),
+        TRXN_COUNT=("BILLING AMT", "count"),
+        DAYS_SINCE_LAST_TRXN=(
+            "TRXN DATE",
+            lambda x: (pd.to_datetime("today") - x.max()).days,
+        ),
+    ).reset_index()
+
+    # ── 7. MCC-level spend pivot ─────────────────────────────────────
+    MCC_frequency_threshold = 5000
+    if "MCC" in txn_df.columns:
+        mcc_counts = txn_df["MCC"].value_counts()
+        txn_df["MCC"] = txn_df["MCC"].map(
+            lambda x: x if mcc_counts.get(x, 0) >= MCC_frequency_threshold
+            else "other_mcc"
+        )
+        mcc_spend = pd.pivot_table(
+            txn_df,
+            values="BILLING AMT",
+            index=cid,
+            columns="MCC",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        mcc_spend.columns = [f"MCC_{col}_SPEND" for col in mcc_spend.columns]
+        mcc_spend = mcc_spend.reset_index()
     else:
-        df["account_tenure_months"] = 0
+        mcc_spend = pd.DataFrame({cid: txn_df[cid].unique()})
 
-    # --- Days since last payment ---
-    if "LAST_PAYMENT_DATE" in df.columns:
-        df["days_since_last_payment"] = (
-            (extraction_date - df["LAST_PAYMENT_DATE"]).dt.days
-        ).fillna(-1)
+    # ── 8. Foreign transaction features ──────────────────────────────
+    if "TRXN COUNTRY" in txn_df.columns:
+        txn_df["IS_FOREIGN_TRXN"] = (
+            txn_df["TRXN COUNTRY"] != "EG"
+        ).fillna(False).astype(int)
+        travel_features = txn_df.groupby(cid).agg(
+            FOREIGN_TRXN_COUNT=("IS_FOREIGN_TRXN", "sum"),
+            FOREIGN_SPEND_RATIO=("IS_FOREIGN_TRXN", "mean"),
+        ).reset_index()
     else:
-        df["days_since_last_payment"] = -1
+        travel_features = pd.DataFrame({cid: txn_df[cid].unique()})
+        travel_features["FOREIGN_TRXN_COUNT"] = 0
+        travel_features["FOREIGN_SPEND_RATIO"] = 0.0
 
-    # --- Time to churn (closure - creation) ---
-    # IMPORTANT: this feature is derived from CLOSURE_DATE which is a leakage
-    # source (non-null only for closed/defaulted accounts). The raw
-    # # CLOSURE_DATE is in DROP_COLS; time_to_churn_days is also dropped there
-    # # because it encodes the same information.
-    # if "CLOSURE_DATE" in df.columns and "CREATION_DATE" in df.columns:
-    #     df["time_to_churn_days"] = (
-    #         (df["CLOSURE_DATE"] - df["CREATION_DATE"]).dt.days
-    #     ).fillna(-1)
-    # else:
-    #     df["time_to_churn_days"] = -1
+    # ── 9. Merge transaction features back ────────────────────────────
+    df = df.merge(rfm_features, on=cid, how="left")
+    df = df.merge(mcc_spend, on=cid, how="left")
+    df = df.merge(travel_features, on=cid, how="left")
 
-    # --- Active flag ---
-    if "ACTIVATED" in df.columns:
-        df["is_active"] = (
-            df["ACTIVATED"].astype(str).str.strip().str.upper() == "A"
-        ).astype(int)
-    else:
-        df["is_active"] = 1
+    # Fill NaN for customers with no transactions in these new columns
+    trxn_feature_cols = (
+        [c for c in rfm_features.columns if c != cid]
+        + [c for c in mcc_spend.columns if c != cid]
+        + [c for c in travel_features.columns if c != cid]
+    )
+    for c in trxn_feature_cols:
+        if c in df.columns:
+            df[c] = df[c].fillna(0)
 
-    # --- Customer age ---
+    # ── 10. Customer age & bands ─────────────────────────────────────
     if "DOB" in df.columns:
-        df["customer_age"] = (
-            (extraction_date - df["DOB"]).dt.days / 365
-        ).fillna(0).clip(lower=0)
-    else:
-        df["customer_age"] = 0
+        df["AGE"] = (extraction_date - df["DOB"]).dt.days // 365
+        bins   = [18, 25, 35, 50, 65, 100]
+        labels = ["18-25", "26-35", "36-50", "51-65", "65+"]
+        df["AGE_GROUP"] = pd.cut(df["AGE"], bins=bins, labels=labels, right=True)
 
-    # --- Primary card flag ---
-    if "CUSTOMER_TYPE" in df.columns:
-        df["is_primary"] = (
-            df["CUSTOMER_TYPE"].astype(str).str.strip().str.upper().str.contains("PRIM")
-        ).astype(int)
-    else:
-        df["is_primary"] = 1
+    # ── 11. Credit-limit bands ───────────────────────────────────────
+    if "CREDIT_LIMIT" in df.columns:
+        limit_bins   = [0, 10_000, 50_000, 100_000, 500_000, np.inf]
+        limit_labels = ["Low", "Medium", "High", "Very High", "Premium"]
+        df["LIMIT_BAND"] = pd.cut(
+            df["CREDIT_LIMIT"], bins=limit_bins, labels=limit_labels,
+        )
 
+    # ── 12. One-hot encoding ─────────────────────────────────────────
+    cols_to_ohe = ["GENDER", "AGE_GROUP", "LIMIT_BAND", "CUSTOMER_TYPE", "ACTIVATED"]
+    existing_ohe = [c for c in cols_to_ohe if c in df.columns]
+    if existing_ohe:
+        df = pd.get_dummies(df, columns=existing_ohe, drop_first=True)
+
+    # ── 13. StandardScaler on float columns ──────────────────────────
+    print("\n--- Applying Data Scaling ---")
+    float_cols = df.select_dtypes(include=["float64", "float32"]).columns.tolist()
+    if float_cols:
+        scaler = StandardScaler()
+        print(f"Scaling {len(float_cols)} float columns ...")
+        df[float_cols] = scaler.fit_transform(df[float_cols])
+    else:
+        print("No float columns found to scale.")
+
+    # ── 14. Final NaN sweep ──────────────────────────────────────────
+    print("\n--- Final Check for NaN Values ---")
+    cols_with_nans = df.columns[df.isna().any()].tolist()
+    if not cols_with_nans:
+        print("Clean sweep! No NaN values found.")
+    else:
+        print(
+            f"Found {len(cols_with_nans)} columns with missing values. "
+            "Filling with median / mode ..."
+        )
+        for col in cols_with_nans:
+            if pd.api.types.is_numeric_dtype(df[col]):
+                med = df[col].median()
+                df[col] = df[col].fillna(med)
+                print(f" - Filled [{col}] with median: {med:.4f}")
+            else:
+                mode_val = (
+                    df[col].mode()[0]
+                    if not df[col].mode().empty
+                    else "Unknown"
+                )
+                df[col] = df[col].fillna(mode_val)
+                print(f" - Filled non-numeric [{col}] with mode: {mode_val}")
+
+    print(f"Final NaN count: {df.isna().sum().sum()}")
     print(f"[feature_eng] Prime features engineered -> {df.shape}")
     return df
-
-
-# ---------------------------------------------------------------------------
-# Transaction features
-# ---------------------------------------------------------------------------
-
-def engineer_transaction_features(txn_df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate transaction-level data into per-customer features.
-
-    Returns a DataFrame indexed by customer ID (RIMNO).
-    """
-    df = txn_df.copy()
-    cid = config.CUSTOMER_ID
-    extraction_date = pd.to_datetime("today")
-
-    # --- Ensure numeric amounts ---
-    for col in ["BILLING AMT", "ORIG AMOUNT", "SETTLEMENT AMT"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-    # --- Outlier capping at p99.9 ---
-    for col in ["BILLING AMT", "SETTLEMENT AMT", "ORIG AMOUNT"]:
-        if col in df.columns:
-            p99 = df[col].quantile(0.999)
-            print(f"[feature_eng] {col} outliers capped at {p99:.2f}: "
-                  f"{(df[col] > p99).sum()} rows")
-            df[col] = df[col].clip(upper=p99)
-
-    # --- Fill ORIG AMOUNT NaN with median ---
-    if "ORIG AMOUNT" in df.columns:
-        df["ORIG AMOUNT"] = df["ORIG AMOUNT"].fillna(df["ORIG AMOUNT"].median())
-
-    # --- Basic transaction aggregations ---
-    billing_col = "BILLING AMT" if "BILLING AMT" in df.columns else None
-    agg_dict: dict = {"txn_count": (cid, "size")}
-    if billing_col:
-        agg_dict.update({
-            "txn_total_amount": (billing_col, "sum"),
-            "txn_mean_amount":  (billing_col, "mean"),
-            "txn_max_amount":   (billing_col, "max"),
-        })
-
-    agg = df.groupby(cid).agg(**agg_dict)
-
-    # --- International transaction ratio ---
-    if "CCY" in df.columns:
-        df["_is_intl"] = (pd.to_numeric(df["CCY"], errors="coerce") != 818).astype(int)
-        agg = agg.join(df.groupby(cid)["_is_intl"].sum().rename("txn_intl_count"))
-        agg["txn_intl_ratio"] = (agg["txn_intl_count"] / agg["txn_count"]).where(
-            agg["txn_count"] > 0, other=0
-        )
-    else:
-        agg["txn_intl_count"] = 0
-        agg["txn_intl_ratio"] = 0
-
-    # --- Reversal ratio ---
-    if "REVERSAL FLAG" in df.columns:
-        df["_is_reversal"] = (
-            df["REVERSAL FLAG"].astype(str).str.strip().str.upper()
-            .isin(["Y", "YES", "1", "TRUE"])
-        ).astype(int)
-        agg = agg.join(df.groupby(cid)["_is_reversal"].sum().rename("txn_reversal_count"))
-        agg["txn_reversal_ratio"] = (agg["txn_reversal_count"] / agg["txn_count"]).where(
-            agg["txn_count"] > 0, other=0
-        )
-    else:
-        agg["txn_reversal_count"] = 0
-        agg["txn_reversal_ratio"] = 0
-
-    # --- Merchant diversity ---
-    if "MERCH ID" in df.columns:
-        agg = agg.join(df.groupby(cid)["MERCH ID"].nunique().rename("unique_merchants"))
-    else:
-        agg["unique_merchants"] = 0
-
-    if "MCC" in df.columns:
-        agg = agg.join(df.groupby(cid)["MCC"].nunique().rename("unique_mcc"))
-    else:
-        agg["unique_mcc"] = 0
-
-    # --- Days since last transaction (recency) ---
-    if "TRXN DATE" in df.columns:
-        txn_recency = df.groupby(cid)["TRXN DATE"].max()
-        agg["days_since_last_txn"] = (extraction_date - txn_recency).dt.days.fillna(-1)
-    else:
-        agg["days_since_last_txn"] = -1
-
-    print(f"[feature_eng] Transaction features -> {agg.shape}")
-    return agg
 
 
 # ---------------------------------------------------------------------------

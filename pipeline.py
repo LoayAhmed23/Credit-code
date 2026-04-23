@@ -12,10 +12,9 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import roc_auc_score
 
 import config
-from data_loader import load_prime_data, load_transaction_data, merge_data
+from data_loader import load_prime_data, load_transaction_data, merge_data, filter_rimno_with_transactions
 from feature_engineering import (
     engineer_prime_features,
-    engineer_transaction_features,
     create_target,
 )
 from preprocessing import preprocess
@@ -119,7 +118,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     sample : bool
         If True, use only 25% of the data (stratified) for fast iteration.
     """
-    TOTAL = 10
+    TOTAL = 9
     _ensure_output_dir()
 
     # ------------------------------------------------------------------
@@ -128,19 +127,19 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     prime_df = load_prime_data()
     txn_df   = load_transaction_data()
 
-    # ------------------------------------------------------------------
-    _banner(2, TOTAL, "FEATURE ENGINEERING")
-    # ------------------------------------------------------------------
-    prime_df     = engineer_prime_features(prime_df)
-    txn_features = engineer_transaction_features(txn_df)
+    # Filter out RIMNOs that have no transactions at all
+    prime_df = filter_rimno_with_transactions(prime_df, txn_df)
 
     # ------------------------------------------------------------------
-    _banner(3, TOTAL, "MERGING PRIME + TRANSACTION DATA")
+    _banner(2, TOTAL, "FEATURE ENGINEERING (PRIME + TRANSACTIONS)")
     # ------------------------------------------------------------------
-    merged = merge_data(prime_df, txn_features)
+    # engineer_prime_features now handles all enrichment (including
+    # transaction-derived features like RFM, MCC spend, etc.) in one
+    # unified step, following the data_to_to_apply.py approach.
+    merged = engineer_prime_features(prime_df, txn_df)
 
     # ------------------------------------------------------------------
-    _banner(4, TOTAL, "CREATING TARGET VARIABLE")
+    _banner(3, TOTAL, "CREATING TARGET VARIABLE")
     # ------------------------------------------------------------------
     # create_target returns the full DataFrame (with optional sample_weight)
     merged = create_target(merged)
@@ -173,7 +172,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     customer_ids = merged[config.CUSTOMER_ID].copy()
 
     # ------------------------------------------------------------------
-    _banner(5, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
+    _banner(4, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
     # ------------------------------------------------------------------
     X, y, artifacts = preprocess(merged, target, fit=True)
 
@@ -182,7 +181,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         sample_weight = sample_weight.loc[X.index]
 
     # ------------------------------------------------------------------
-    _banner(6, TOTAL, "LEAKAGE CHECK")
+    _banner(5, TOTAL, "LEAKAGE CHECK")
     # ------------------------------------------------------------------
     # Runs before train/test split so we catch leakage on the full feature
     # matrix — any suspect column will have a near-perfect single-feature AUC
@@ -190,7 +189,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     check_for_leakage(X, y, abort_on_leak=True)
 
     # ------------------------------------------------------------------
-    _banner(7, TOTAL, "TRAIN / TEST SPLIT")
+    _banner(6, TOTAL, "TRAIN / TEST SPLIT")
     # ------------------------------------------------------------------
     split_kwargs = dict(
         test_size=config.TEST_SIZE,
@@ -214,9 +213,9 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     if tune:
-        _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(7, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
     else:
-        _banner(8, TOTAL, "XGBOOST TRAINING")
+        _banner(7, TOTAL, "XGBOOST TRAINING")
     # ------------------------------------------------------------------
 
     if tune:
@@ -251,7 +250,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
-    _banner(9, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
+    _banner(8, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
     # ------------------------------------------------------------------
     # Train a light model to get gain-based importances, then retrain using
     # only the top-N features. This avoids any intersection-based selection.
@@ -280,7 +279,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     if tune:
         # NOTE: tuning path currently uses sklearn API and ignores early stopping.
         # We keep behavior consistent: after selection, tune on the reduced set.
-        _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(7, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
         best_model, best_params = tune_hyperparameters(X_train, y_train)
         print("  Generating predictions on test set ...")
         y_proba = best_model.predict_proba(X_test)[:, 1]
@@ -292,7 +291,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_pred = (y_proba >= best_threshold).astype(int)
         model_to_save = best_model
     else:
-        _banner(8, TOTAL, "XGBOOST TRAINING")
+        _banner(7, TOTAL, "XGBOOST TRAINING")
         print("  Training final XGBoost on top-gain features ...")
         bst = train_xgboost(
             X_train,
@@ -314,7 +313,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = bst
 
     # ------------------------------------------------------------------
-    _banner(10, TOTAL, "EVALUATION & OUTPUT")
+    _banner(9, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
     metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
     report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH)
@@ -381,10 +380,11 @@ def run_scoring_pipeline(model_path: str = None,
     prime_df = load_prime_data(prime_dir)
     txn_df   = load_transaction_data(txn_dir)
 
-    _banner(3, TOTAL, "FEATURE ENGINEERING")
-    prime_df     = engineer_prime_features(prime_df)
-    txn_features = engineer_transaction_features(txn_df)
-    merged       = merge_data(prime_df, txn_features)
+    # Filter out RIMNOs that have no transactions
+    prime_df = filter_rimno_with_transactions(prime_df, txn_df)
+
+    _banner(3, TOTAL, "FEATURE ENGINEERING (PRIME + TRANSACTIONS)")
+    merged = engineer_prime_features(prime_df, txn_df)
 
     customer_ids = merged[config.CUSTOMER_ID].copy()
 
