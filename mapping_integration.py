@@ -87,7 +87,7 @@ def apply_mapping_layer(
     rim_col: str = "RIMNO",
     dob_col: str = "DOB",
     txn_product_col: str = "DESCRIPTION",
-    prime_product_col: str = "NAME",
+    prime_product_col: str = "PRODUCT_NAME",
     mapped_id_col: str = "CUSTOMER_ID",
 ) -> tuple[pd.DataFrame, pd.DataFrame, str, MappingStats]:
     """Apply mapping to prime + transactions.
@@ -111,10 +111,21 @@ def apply_mapping_layer(
 
     # 3) Build lookup for transactions: (RIMNO, PRODUCT_NAME) -> CUSTOMER_ID
     # Normalize product name to align with the script intent.
-    # prime script used PRODUCT_NAME derived from NAME; txn script used DESCRIPTION.
+    # Prefer PRODUCT_NAME, but fall back to common alternatives.
+    if prime_product_col not in p.columns:
+        for alt in ("NAME", "DESCRIPTION", "PRODUCT", "PRODUCT NAME"):
+            if alt in p.columns:
+                print(f"[mapping] prime_product_col '{prime_product_col}' not found; using '{alt}' instead")
+                prime_product_col = alt
+                break
+    if prime_product_col not in p.columns:
+        raise KeyError(
+            f"Prime DF missing product column '{prime_product_col}'. "
+            "Expected something like 'PRODUCT_NAME' or 'NAME'."
+        )
+
     prime_products = p[[rim_col, prime_product_col, mapped_id_col]].copy()
-    if prime_product_col in prime_products.columns:
-        prime_products[prime_product_col] = prime_products[prime_product_col].astype("string").str.strip()
+    prime_products[prime_product_col] = prime_products[prime_product_col].astype("string").str.strip()
     prime_products[rim_col] = _to_int64_series(prime_products[rim_col])
 
     if txn_product_col in t.columns:
