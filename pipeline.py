@@ -13,6 +13,7 @@ from sklearn.metrics import roc_auc_score
 
 import config
 from data_loader import load_prime_data, load_transaction_data, merge_data
+from mapping_integration import apply_mapping_layer
 from feature_engineering import (
     engineer_prime_features,
     engineer_transaction_features,
@@ -128,11 +129,32 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     prime_df = load_prime_data()
     txn_df   = load_transaction_data()
 
+    # Optional: apply mapping scripts logic to create a stable CUSTOMER_ID
+    # and map transactions onto it. Kept behind a toggle for easy rollback.
+    mapped_id_col = None
+    if getattr(config, "ENABLE_MAPPING", False):
+        _banner(1, TOTAL, "OPTIONAL MAPPING LAYER (prime_id + transaction_id_mapping)")
+        prime_df, txn_df, mapped_id_col, _ = apply_mapping_layer(
+            prime_df,
+            txn_df,
+            mapped_id_col=getattr(config, "MAPPED_CUSTOMER_ID_COL", "CUSTOMER_ID"),
+        )
+
     # ------------------------------------------------------------------
     _banner(2, TOTAL, "FEATURE ENGINEERING")
     # ------------------------------------------------------------------
     prime_df     = engineer_prime_features(prime_df)
-    txn_features = engineer_transaction_features(txn_df)
+    # If mapping is enabled, aggregate txn features by mapped CUSTOMER_ID.
+    # This is done by temporarily pointing config.CUSTOMER_ID to the mapped column.
+    if mapped_id_col:
+        old_cid = config.CUSTOMER_ID
+        config.CUSTOMER_ID = mapped_id_col
+        try:
+            txn_features = engineer_transaction_features(txn_df)
+        finally:
+            config.CUSTOMER_ID = old_cid
+    else:
+        txn_features = engineer_transaction_features(txn_df)
 
     # ------------------------------------------------------------------
     _banner(3, TOTAL, "MERGING PRIME + TRANSACTION DATA")
@@ -170,7 +192,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     print(f"  Non-default (0): {n_total - n_default:,}  "
           f"({(n_total - n_default) / n_total * 100:.1f}%)")
 
-    customer_ids = merged[config.CUSTOMER_ID].copy()
+    customer_ids = merged[mapped_id_col].copy() if mapped_id_col else merged[config.CUSTOMER_ID].copy()
 
     # ------------------------------------------------------------------
     _banner(5, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
@@ -381,9 +403,26 @@ def run_scoring_pipeline(model_path: str = None,
     prime_df = load_prime_data(prime_dir)
     txn_df   = load_transaction_data(txn_dir)
 
+    mapped_id_col = None
+    if getattr(config, "ENABLE_MAPPING", False):
+        _banner(2, TOTAL, "OPTIONAL MAPPING LAYER (prime_id + transaction_id_mapping)")
+        prime_df, txn_df, mapped_id_col, _ = apply_mapping_layer(
+            prime_df,
+            txn_df,
+            mapped_id_col=getattr(config, "MAPPED_CUSTOMER_ID_COL", "CUSTOMER_ID"),
+        )
+
     _banner(3, TOTAL, "FEATURE ENGINEERING")
     prime_df     = engineer_prime_features(prime_df)
-    txn_features = engineer_transaction_features(txn_df)
+    if mapped_id_col:
+        old_cid = config.CUSTOMER_ID
+        config.CUSTOMER_ID = mapped_id_col
+        try:
+            txn_features = engineer_transaction_features(txn_df)
+        finally:
+            config.CUSTOMER_ID = old_cid
+    else:
+        txn_features = engineer_transaction_features(txn_df)
     merged       = merge_data(prime_df, txn_features)
 
     customer_ids = merged[config.CUSTOMER_ID].copy()
@@ -404,7 +443,7 @@ def run_scoring_pipeline(model_path: str = None,
     pred = (proba >= best_threshold).astype(int)     
 
     scores_df = pd.DataFrame({
-        config.CUSTOMER_ID:    customer_ids.values,
+        (mapped_id_col if mapped_id_col else config.CUSTOMER_ID): customer_ids.values,
         "default_probability": proba,
         "predicted_label":     pred,
     })

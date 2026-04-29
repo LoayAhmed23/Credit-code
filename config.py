@@ -17,6 +17,17 @@ SCORES_PATH = os.path.join(OUTPUT_DIR, "risk_scores.csv")
 REPORT_PATH = os.path.join(OUTPUT_DIR, "evaluation_report.txt")
 
 # ---------------------------------------------------------------------------
+# Optional mapping layer (from Credit-code/mapping/)
+# ---------------------------------------------------------------------------
+# When True, the pipeline will:
+# - build CUSTOMER_ID from prime using (RIMNO, DOB)
+# - map transactions to CUSTOMER_ID using (RIMNO, DESCRIPTION)
+ENABLE_MAPPING = False
+
+# Name of the mapped id column that will be used to aggregate transactions
+MAPPED_CUSTOMER_ID_COL = "CUSTOMER_ID"
+
+# ---------------------------------------------------------------------------
 # Column mappings
 # ---------------------------------------------------------------------------
 CUSTOMER_ID = "RIMNO"
