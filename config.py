@@ -160,6 +160,13 @@ NUM_BOOST_ROUND = 1000
 EARLY_STOPPING_ROUNDS = 50
 
 # ---------------------------------------------------------------------------
+# SMOTE (class imbalance handling)
+# ---------------------------------------------------------------------------
+SMOTE_ENABLED = True
+SMOTE_SAMPLING_STRATEGY = 0.5   # ratio of minority to majority after resampling
+                                # 0.5 means minority becomes 50% of majority count
+
+# ---------------------------------------------------------------------------
 # Hyperparameter tuning
 # ---------------------------------------------------------------------------
 TUNE_N_ITER = 20

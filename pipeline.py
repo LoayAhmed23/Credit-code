@@ -120,7 +120,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     sample : bool
         If True, use only 25% of the data (stratified) for fast iteration.
     """
-    TOTAL = 11
+    TOTAL = 12
     _ensure_output_dir()
 
     # ------------------------------------------------------------------
@@ -256,10 +256,29 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     print(f"  Test  default rate: {y_test.sum()  / len(y_test)  * 100:.1f}%")
 
     # ------------------------------------------------------------------
-    if tune:
-        _banner(9, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+    _banner(9, TOTAL, "SMOTE OVERSAMPLING (train only)")
+    # ------------------------------------------------------------------
+    if getattr(config, "SMOTE_ENABLED", False):
+        from imblearn.over_sampling import SMOTE
+        smote = SMOTE(
+            sampling_strategy=config.SMOTE_SAMPLING_STRATEGY,
+            random_state=config.RANDOM_STATE,
+        )
+        print(f"  Before SMOTE: {X_train.shape[0]:,} samples "
+              f"(default={int(y_train.sum()):,}, non-default={int((y_train==0).sum()):,})")
+        X_train, y_train = smote.fit_resample(X_train, y_train)
+        # sample_weight is not meaningful after SMOTE — reset to None
+        sw_train = None
+        print(f"  After  SMOTE: {X_train.shape[0]:,} samples "
+              f"(default={int(y_train.sum()):,}, non-default={int((y_train==0).sum()):,})")
     else:
-        _banner(9, TOTAL, "XGBOOST TRAINING")
+        print("  SMOTE disabled — skipping.")
+
+    # ------------------------------------------------------------------
+    if tune:
+        _banner(10, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+    else:
+        _banner(10, TOTAL, "XGBOOST TRAINING")
     # ------------------------------------------------------------------
 
     if tune:
@@ -294,7 +313,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
-    _banner(10, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
+    _banner(11, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
     # ------------------------------------------------------------------
     # Train a light model to get gain-based importances, then retrain using
     # only the top-N features. This avoids any intersection-based selection.
@@ -323,7 +342,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     if tune:
         # NOTE: tuning path currently uses sklearn API and ignores early stopping.
         # We keep behavior consistent: after selection, tune on the reduced set.
-        _banner(9, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(10, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
         best_model, best_params = tune_hyperparameters(X_train, y_train)
         print("  Generating predictions on test set ...")
         y_proba = best_model.predict_proba(X_test)[:, 1]
@@ -335,7 +354,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_pred = (y_proba >= best_threshold).astype(int)
         model_to_save = best_model
     else:
-        _banner(9, TOTAL, "XGBOOST TRAINING")
+        _banner(10, TOTAL, "XGBOOST TRAINING")
         print("  Training final XGBoost on top-gain features ...")
         bst = train_xgboost(
             X_train,
@@ -357,7 +376,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = bst
 
     # ------------------------------------------------------------------
-    _banner(11, TOTAL, "EVALUATION & OUTPUT")
+    _banner(12, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
     metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
     report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH)
