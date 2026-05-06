@@ -92,7 +92,7 @@ def load_prime_data(data_dir: str = None) -> pd.DataFrame:
     - Tags each row with ``snapshot_month`` extracted from the filename.
     """
     data_dir = data_dir or config.PRIME_DATA_DIR
-    files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
+    files = sorted(glob.glob(os.path.join(data_dir, "*active.csv")))
     if not files:
         raise FileNotFoundError(f"No CSV files found in {data_dir}")
 
@@ -169,7 +169,7 @@ def load_transaction_data(data_dir: str = None) -> pd.DataFrame:
     - Tags each row with ``snapshot_month`` extracted from the filename.
     """
     data_dir = data_dir or config.TRANSACTION_DATA_DIR
-    files = sorted(glob.glob(os.path.join(data_dir, "*active.csv")))
+    files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
     if not files:
         raise FileNotFoundError(f"No CSV files found in {data_dir}")
 
