@@ -19,9 +19,10 @@ REPORT_PATH = os.path.join(OUTPUT_DIR, "evaluation_report.txt")
 # ---------------------------------------------------------------------------
 # Column mappings
 # ---------------------------------------------------------------------------
-CUSTOMER_ID = "RIMNO"
+CUSTOMER_ID = "CUSTOMER_ID"
 TARGET_COL = "target"
 STATUS_COL = "STATUS"
+MONTH_COL = "snapshot_month"
 
 TARGET_MODE = "weighted_binary"
 
@@ -44,7 +45,7 @@ PRIME_STRING_COLS = [
     "BRANCH_NAME", "ACTIVATED", "STATUS", "STATUS_NAME", "NAME",
     "GENDER", "CUSTOMER_TYPE", "Card account status ", "ORGANIZATION",
 ]
-PRIME_INT_COLS = ["RIMNO"]
+PRIME_INT_COLS = ["RIMNO", "CUSTOMER_ID", "BRANCH_ID"]
 PRIME_FLOAT_COLS = [
     "AVAILABLE_LIMIT", "LEDGER_BALANCE", "LAST_PAYMENT_AMOUNT",
     "OVERDUEAMOUNT", "CREDIT_LIMIT",
@@ -70,6 +71,8 @@ TXN_STRING_COLS = [
 DROP_COLS = [
     # --- Identifiers (no predictive value) ---
     "RIMNO",
+    "CUSTOMER_ID",
+    "snapshot_month",
     "BRANCH_ID",
     "BRANCH_NAME",
     "MAPPING ACCOUNT NO.",
@@ -129,8 +132,7 @@ LEAKAGE_AUC_THRESHOLD = 0.95
 # Date columns (for parsing)
 # ---------------------------------------------------------------------------
 DATE_COLS_PRIME = [
-    "CREATION_DATE", "LAST_STAEMENT_DATE", "LAST_PAYMENT_DATE",
-    "CLOSURE_DATE", "DOB",
+    "CREATION_DATE", "LAST_STAEMENT_DATE", "CLOSURE_DATE", "DOB",
 ]
 DATE_COLS_TXN = ["POST DATE", "TRXN DATE"]
 
@@ -170,3 +172,14 @@ TUNE_PARAM_GRID = {
     "colsample_bytree": [0.6, 0.8, 1.0],      
     "subsample":        [0.6, 0.8, 1.0],      
 }
+
+# ---------------------------------------------------------------------------
+# Temporal feature engineering
+# ---------------------------------------------------------------------------
+TREND_COLS = [
+    "utilization_ratio", "overdue_ratio", "payment_coverage",
+    "financial_stress_score", "available_credit_ratio", "over_limit_ratio",
+]
+TXN_TREND_COLS = [
+    "txn_count", "txn_total_amount", "txn_mean_amount",
+]

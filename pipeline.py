@@ -16,6 +16,7 @@ from data_loader import load_prime_data, load_transaction_data, merge_data
 from feature_engineering import (
     engineer_prime_features,
     engineer_transaction_features,
+    engineer_temporal_features,
     create_target,
 )
 from preprocessing import preprocess
@@ -119,7 +120,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     sample : bool
         If True, use only 25% of the data (stratified) for fast iteration.
     """
-    TOTAL = 10
+    TOTAL = 11
     _ensure_output_dir()
 
     # ------------------------------------------------------------------
@@ -151,6 +152,17 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         merged["sample_weight"] if "sample_weight" in merged.columns else None
     )
 
+    # ------------------------------------------------------------------
+    _banner(5, TOTAL, "TEMPORAL FEATURE ENGINEERING")
+    # ------------------------------------------------------------------
+    # Compute per-customer trends across monthly snapshots and collapse
+    # to one row per customer (latest month), enriched with trend features.
+    merged = engineer_temporal_features(merged)
+    target = merged[config.TARGET_COL]
+    sample_weight = (
+        merged["sample_weight"] if "sample_weight" in merged.columns else None
+    )
+
     if sample:
         print("\n  [SAMPLING MODE] Reducing dataset to 25% via stratified sampling ...")
         keep_idx, _ = train_test_split(
@@ -172,8 +184,15 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     customer_ids = merged[config.CUSTOMER_ID].copy()
 
+    # Save the snapshot_month before preprocessing drops it
+    snapshot_months = (
+        merged[config.MONTH_COL].copy()
+        if config.MONTH_COL in merged.columns
+        else None
+    )
+
     # ------------------------------------------------------------------
-    _banner(5, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
+    _banner(6, TOTAL, "PREPROCESSING (encoding, scaling, imputation)")
     # ------------------------------------------------------------------
     X, y, artifacts = preprocess(merged, target, fit=True)
 
@@ -182,29 +201,53 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         sample_weight = sample_weight.loc[X.index]
 
     # ------------------------------------------------------------------
-    _banner(6, TOTAL, "LEAKAGE CHECK")
+    _banner(7, TOTAL, "LEAKAGE CHECK")
     # ------------------------------------------------------------------
-    # Runs before train/test split so we catch leakage on the full feature
-    # matrix — any suspect column will have a near-perfect single-feature AUC
-    # regardless of which split it's measured on.
     check_for_leakage(X, y, abort_on_leak=True)
 
     # ------------------------------------------------------------------
-    _banner(7, TOTAL, "TRAIN / TEST SPLIT")
+    _banner(8, TOTAL, "TRAIN / TEST SPLIT (temporal)")
     # ------------------------------------------------------------------
-    split_kwargs = dict(
-        test_size=config.TEST_SIZE,
-        stratify=y,
-        random_state=config.RANDOM_STATE,
-    )
+    # Use temporal split: train on older months, test on the latest month.
+    # Falls back to a random stratified split if month data is unavailable.
+    if snapshot_months is not None:
+        snapshot_months = snapshot_months.loc[X.index]
+        latest_month = snapshot_months.max()
+        train_mask = snapshot_months < latest_month
+        test_mask  = snapshot_months == latest_month
 
-    if sample_weight is not None:
-        X_train, X_test, y_train, y_test, sw_train, _ = train_test_split(
-            X, y, sample_weight, **split_kwargs
-        )
+        if test_mask.sum() == 0 or train_mask.sum() == 0:
+            print("  [WARNING] Only one month detected — falling back to random split.")
+            split_kwargs = dict(
+                test_size=config.TEST_SIZE, stratify=y,
+                random_state=config.RANDOM_STATE,
+            )
+            if sample_weight is not None:
+                X_train, X_test, y_train, y_test, sw_train, _ = train_test_split(
+                    X, y, sample_weight, **split_kwargs,
+                )
+            else:
+                X_train, X_test, y_train, y_test = train_test_split(X, y, **split_kwargs)
+                sw_train = None
+        else:
+            X_train, X_test = X[train_mask], X[test_mask]
+            y_train, y_test = y[train_mask], y[test_mask]
+            sw_train = sample_weight[train_mask] if sample_weight is not None else None
+            print(f"  Temporal split: train on months < {latest_month.strftime('%Y-%m')}, "
+                  f"test on {latest_month.strftime('%Y-%m')}")
     else:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, **split_kwargs)
-        sw_train = None
+        print("  No month data — using random stratified split.")
+        split_kwargs = dict(
+            test_size=config.TEST_SIZE, stratify=y,
+            random_state=config.RANDOM_STATE,
+        )
+        if sample_weight is not None:
+            X_train, X_test, y_train, y_test, sw_train, _ = train_test_split(
+                X, y, sample_weight, **split_kwargs,
+            )
+        else:
+            X_train, X_test, y_train, y_test = train_test_split(X, y, **split_kwargs)
+            sw_train = None
 
     print(f"  Train set:          {X_train.shape[0]:,} samples")
     print(f"  Test set:           {X_test.shape[0]:,} samples")
@@ -214,9 +257,9 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     if tune:
-        _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(9, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
     else:
-        _banner(8, TOTAL, "XGBOOST TRAINING")
+        _banner(9, TOTAL, "XGBOOST TRAINING")
     # ------------------------------------------------------------------
 
     if tune:
@@ -251,7 +294,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
-    _banner(9, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
+    _banner(10, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
     # ------------------------------------------------------------------
     # Train a light model to get gain-based importances, then retrain using
     # only the top-N features. This avoids any intersection-based selection.
@@ -280,7 +323,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     if tune:
         # NOTE: tuning path currently uses sklearn API and ignores early stopping.
         # We keep behavior consistent: after selection, tune on the reduced set.
-        _banner(8, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(9, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
         best_model, best_params = tune_hyperparameters(X_train, y_train)
         print("  Generating predictions on test set ...")
         y_proba = best_model.predict_proba(X_test)[:, 1]
@@ -292,7 +335,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_pred = (y_proba >= best_threshold).astype(int)
         model_to_save = best_model
     else:
-        _banner(8, TOTAL, "XGBOOST TRAINING")
+        _banner(9, TOTAL, "XGBOOST TRAINING")
         print("  Training final XGBoost on top-gain features ...")
         bst = train_xgboost(
             X_train,
@@ -314,7 +357,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = bst
 
     # ------------------------------------------------------------------
-    _banner(10, TOTAL, "EVALUATION & OUTPUT")
+    _banner(11, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
     metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
     report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH)
