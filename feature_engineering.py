@@ -56,7 +56,12 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Fill known missing-value patterns ---
     if "GENDER" in df.columns:
-        df["GENDER"] = df["GENDER"].fillna("Unknown")
+        df["GENDER"] = (
+            df["GENDER"].astype(str).str.strip().str.upper()
+            .map({"MALE": 1, "FEMALE": 0})
+            .fillna(0)
+            .astype(int)
+        )
 
     # --- Outlier capping (p99.9) for overdue amount ---
     overdue_col = "OVERDUEAMOUNT" if "OVERDUEAMOUNT" in df.columns else "OVERDUE_AMOUNT"

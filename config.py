@@ -75,7 +75,7 @@ DROP_COLS = [
     "snapshot_month",
     "BRANCH_ID",
     "BRANCH_NAME",
-    "MAPPING ACCOUNT NO.",
+    "ACTIVATED",
 
     # --- (A) Direct label encodings ---
     # STATUS / STATUS_NAME contain the exact strings used to build the target.
