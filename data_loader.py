@@ -158,6 +158,113 @@ def load_prime_data(data_dir: str = None) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Historical data (SUSP / WROF customers)
+# ---------------------------------------------------------------------------
+
+def load_historical_data(data_dir: str = None) -> pd.DataFrame:
+    """Load historical CSV files containing SUSP / WROF customers.
+
+    These files follow the same schema as active prime files, with the
+    status column ``"Card account status "``.  The function:
+
+    1. Reads every ``*historical.csv`` from the data directory.
+    2. Keeps only rows whose status is in {SUSP, WROF}.
+    3. Applies the same dtype parsing / date handling as ``load_prime_data``.
+    4. Tags each row with a ``snapshot_month`` extracted from the filename.
+
+    Returns an empty DataFrame (with no columns) when no files are found,
+    so the caller can safely ``pd.concat`` without crashing.
+    """
+    data_dir = data_dir or config.HISTORICAL_DATA_DIR
+    pattern = os.path.join(data_dir, config.HISTORICAL_GLOB)
+    files = sorted(glob.glob(pattern))
+
+    if not files:
+        print(f"[data_loader] No historical files matching {pattern} — skipping.")
+        return pd.DataFrame()
+
+    # Build dtype dict identical to load_prime_data
+    str_dtype = {
+        col: "string"
+        for col in (config.PRIME_STRING_COLS
+                    + config.PRIME_INT_COLS
+                    + config.PRIME_FLOAT_COLS)
+    }
+
+    frames = []
+    keep_statuses = {"SUSP", "WROF"}
+
+    for f in files:
+        headers = pd.read_csv(f, nrows=0, encoding="latin").columns.tolist()
+        parse_dates = [c for c in config.DATE_COLS_PRIME if c in headers]
+        df = pd.read_csv(
+            f,
+            encoding="latin",
+            dtype=str_dtype,
+            parse_dates=parse_dates,
+        )
+
+        # --- Filter to SUSP / WROF rows using the standard status column ---
+        status_col = config.STATUS_COL
+        if status_col in df.columns:
+            df[status_col] = df[status_col].astype(str).str.strip().str.upper()
+            before = len(df)
+            df = df[df[status_col].isin(keep_statuses)]
+            print(f"  {os.path.basename(f)}: kept {len(df)}/{before} "
+                  f"SUSP/WROF rows")
+        else:
+            print(f"  [WARNING] {os.path.basename(f)}: no status column "
+                  f"found — skipping")
+            continue
+
+        if df.empty:
+            continue
+
+        df["source_file"] = os.path.basename(f)
+        df[config.MONTH_COL] = _get_month_year_prime(f)
+        frames.append(df)
+
+    if not frames:
+        print("[data_loader] No SUSP/WROF rows found in historical files.")
+        return pd.DataFrame()
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    # Rename customer ID column (raw data may have "RIM_NO" or "RIM_NO:")
+    if "RIM_NO" in combined.columns:
+        combined = combined.rename(columns={"RIM_NO": "RIMNO"})
+
+    # Parse float columns (remove commas, cast)
+    for col in config.PRIME_FLOAT_COLS:
+        if col in combined.columns:
+            combined[col] = combined[col].apply(_parse_float)
+
+    # Parse int columns
+    for col in config.PRIME_INT_COLS:
+        if col in combined.columns:
+            combined[col] = combined[col].apply(_parse_int)
+
+    # Drop columns that no longer exist in the schema
+    for col in ["MAPPING_ACCNO", "MIN_PAYMENT", "OVER_LIMIT"]:
+        if col in combined.columns:
+            combined = combined.drop(columns=[col])
+
+    # Re-parse date columns that may not have been auto-parsed
+    for col in config.DATE_COLS_PRIME:
+        if col in combined.columns and not pd.api.types.is_datetime64_any_dtype(combined[col]):
+            combined[col] = pd.to_datetime(combined[col], errors="coerce")
+
+    combined = combined.sort_values(config.MONTH_COL).reset_index(drop=True)
+
+    print(f"[data_loader] Loaded {len(files)} historical file(s) -> "
+          f"{combined.shape}  (SUSP + WROF only)")
+    months = combined[config.MONTH_COL].nunique()
+    print(f"  Detected {months} unique month(s): "
+          f"{sorted(combined[config.MONTH_COL].dt.strftime('%Y-%m').unique())}")
+    return combined
+
+
+# ---------------------------------------------------------------------------
 # Transaction data
 # ---------------------------------------------------------------------------
 

@@ -10,6 +10,8 @@ import os
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PRIME_DATA_DIR = os.path.join(BASE_DIR, "prime_data")
+HISTORICAL_DATA_DIR = os.path.join(BASE_DIR, "prime_data")  # same folder; different glob
+HISTORICAL_GLOB = "*historical.csv"
 TRANSACTION_DATA_DIR = os.path.join(BASE_DIR, "transaction_data")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 MODEL_PATH = os.path.join(OUTPUT_DIR, "model.joblib")
@@ -21,7 +23,7 @@ REPORT_PATH = os.path.join(OUTPUT_DIR, "evaluation_report.txt")
 # ---------------------------------------------------------------------------
 CUSTOMER_ID = "CUSTOMER_ID"
 TARGET_COL = "target"
-STATUS_COL = "STATUS"
+STATUS_COL = "Card account status "
 MONTH_COL = "snapshot_month"
 
 TARGET_MODE = "weighted_binary"

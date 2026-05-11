@@ -12,7 +12,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import roc_auc_score
 
 import config
-from data_loader import load_prime_data, load_transaction_data, merge_data
+from data_loader import load_prime_data, load_historical_data, load_transaction_data, merge_data
 from feature_engineering import (
     engineer_prime_features,
     engineer_transaction_features,
@@ -128,6 +128,15 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     # ------------------------------------------------------------------
     prime_df = load_prime_data()
     txn_df   = load_transaction_data()
+
+    # Load historical SUSP/WROF customers to enrich training data
+    hist_df = load_historical_data()
+    if not hist_df.empty:
+        prime_before = len(prime_df)
+        prime_df = pd.concat([prime_df, hist_df], ignore_index=True)
+        prime_df = prime_df.sort_values(config.MONTH_COL).reset_index(drop=True)
+        print(f"  Added {len(hist_df):,} historical SUSP/WROF rows "
+              f"({prime_before:,} -> {len(prime_df):,})")
 
     # ------------------------------------------------------------------
     _banner(2, TOTAL, "FEATURE ENGINEERING")
