@@ -149,14 +149,6 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     # ------------------------------------------------------------------
     merged = merge_data(prime_df, txn_features)
 
-    # Drop customers with no transaction data
-    if "txn_count" in merged.columns:
-        before = len(merged)
-        merged = merged[merged["txn_count"] > 0].reset_index(drop=True)
-        dropped = before - len(merged)
-        print(f"  Dropped {dropped:,} rows with no transactions "
-              f"({before:,} -> {len(merged):,})")
-
     # ------------------------------------------------------------------
     _banner(4, TOTAL, "CREATING TARGET VARIABLE")
     # ------------------------------------------------------------------
@@ -265,6 +257,16 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         else:
             X_train, X_test, y_train, y_test = train_test_split(X, y, **split_kwargs)
             sw_train = None
+
+    # Remove zero-transaction rows from training only (keep in test)
+    if "txn_count" in X_train.columns:
+        has_txn = X_train["txn_count"] > 0
+        dropped = (~has_txn).sum()
+        X_train = X_train[has_txn]
+        y_train = y_train[has_txn]
+        if sw_train is not None:
+            sw_train = sw_train[has_txn]
+        print(f"  Dropped {dropped:,} zero-transaction rows from train set")
 
     print(f"  Train set:          {X_train.shape[0]:,} samples")
     print(f"  Test set:           {X_test.shape[0]:,} samples")
