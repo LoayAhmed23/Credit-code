@@ -174,6 +174,7 @@ SMOTE_SAMPLING_STRATEGY = 0.7   # ratio of minority to majority after resampling
 # ---------------------------------------------------------------------------
 TUNE_N_ITER = 20
 TUNE_CV_FOLDS = 3
+N_GPUS = 2   # number of GPUs for parallel CV folds in tuning
 
 # XGBoost hyperparameters for tuning
 TUNE_PARAM_GRID = {
