@@ -149,6 +149,14 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     # ------------------------------------------------------------------
     merged = merge_data(prime_df, txn_features)
 
+    # Drop customers with no transaction data
+    if "txn_count" in merged.columns:
+        before = len(merged)
+        merged = merged[merged["txn_count"] > 0].reset_index(drop=True)
+        dropped = before - len(merged)
+        print(f"  Dropped {dropped:,} rows with no transactions "
+              f"({before:,} -> {len(merged):,})")
+
     # ------------------------------------------------------------------
     _banner(4, TOTAL, "CREATING TARGET VARIABLE")
     # ------------------------------------------------------------------

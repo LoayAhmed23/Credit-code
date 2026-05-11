@@ -158,7 +158,7 @@ def tune_hyperparameters(X_train, y_train):
         cv=config.TUNE_CV_FOLDS,
         verbose=2,
         random_state=config.RANDOM_STATE,
-        n_jobs=config.n_gpus,
+        n_jobs=config.N_GPUS,
     )
 
     print(
