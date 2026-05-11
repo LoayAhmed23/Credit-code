@@ -76,34 +76,23 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     available_limit = _get_numeric(df, "AVAILABLE_LIMIT")
     ledger          = _get_numeric(df, "LEDGER_BALANCE")
     overdue         = _get_numeric(df, "OVERDUEAMOUNT", "OVERDUE_AMOUNT")
-    total_hold      = _get_numeric(df, "TOTAL_HOLD")
-    last_payment    = _get_numeric(df, "LAST_PAYMENT_AMOUNT")
-    min_payment     = _get_numeric(df, "MIN_PAYMENT", "MIN_PAYMENT_AMOUNT")
-    over_limit_raw  = _get_numeric(df, "OVER_LIMIT")
 
     credit_limit_safe = credit_limit.replace(0, np.nan)
-    min_payment_safe  = min_payment.replace(0, np.nan)
 
     # --- Utilization ratios ---
     df["utilization_ratio"]      = (ledger / credit_limit_safe).fillna(0)
-    df["utilization_with_hold"]  = ((ledger + total_hold) / credit_limit_safe).fillna(0)
     df["available_credit_ratio"] = (available_limit / credit_limit_safe).fillna(0)
 
     # --- Over-limit ratio ---
     # Use the dedicated column if it exists; otherwise derive it.
-    if "OVER_LIMIT" in df.columns:
-        over_limit_val = over_limit_raw
-    else:
-        over_limit_val = (ledger - credit_limit).clip(lower=0)
+
+    over_limit_val = (ledger - credit_limit).clip(lower=0)
     df["over_limit_ratio"] = (over_limit_val / credit_limit_safe).fillna(0)
 
     # --- Overdue ratio ---
     # NOTE: we do NOT create an "overdue_severity" alias — it was identical
     # to overdue_ratio and the duplicate confused feature importance charts.
     df["overdue_ratio"] = (overdue / credit_limit_safe).fillna(0)
-
-    # --- Payment coverage (>1 = paid more than minimum, <1 = underpaying) ---
-    df["payment_coverage"] = (last_payment / min_payment_safe).fillna(-1)
 
     # --- Composite financial stress score ---
     # Weights reflect increasing severity: utilization < over-limit < overdue.
@@ -145,13 +134,13 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df["customer_age"] = df["customer_age"].replace(0, median_age)
 
-    # --- Primary card flag ---
-    if "CUSTOMER_TYPE" in df.columns:
-        df["is_primary"] = (
-            df["CUSTOMER_TYPE"].astype(str).str.strip().str.upper().str.contains("PRIM")
-        ).astype(int)
-    else:
-        df["is_primary"] = 1
+    # # --- Primary card flag ---
+    # if "CUSTOMER_TYPE" in df.columns:
+    #     df["is_primary"] = (
+    #         df["CUSTOMER_TYPE"].astype(str).str.strip().str.upper().str.contains("PRIM")
+    #     ).astype(int)
+    # else:
+    #     df["is_primary"] = 1
 
     print(f"[feature_eng] Prime features engineered -> {df.shape}")
     return df
