@@ -121,6 +121,7 @@ DROP_COLS = [
     # --- Pipeline artefact ---
     "sample_weight",
     "target",
+    "CUSTOMER_TYPE",
 ]
 
 # ---------------------------------------------------------------------------
