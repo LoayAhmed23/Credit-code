@@ -129,8 +129,14 @@ def train_xgboost(X_train, y_train, X_val, y_val, params=None, sample_weight_tra
 # Hyperparameter tuning
 # ---------------------------------------------------------------------------
 
-def tune_hyperparameters(X_train, y_train):
+def tune_hyperparameters(X_train, y_train, X_val=None, y_val=None):
     """Run RandomizedSearchCV over XGBoost.
+
+    Parameters
+    ----------
+    X_train, y_train : training data (possibly SMOTE-resampled)
+    X_val, y_val     : held-out validation set for early stopping.
+                       Required when early_stopping_rounds is set.
 
     Returns (best_estimator, best_params).
     """
@@ -174,7 +180,15 @@ def tune_hyperparameters(X_train, y_train):
         f"  Starting hyperparameter search "
         f"({config.TUNE_N_ITER} iterations x {config.TUNE_CV_FOLDS}-fold CV) ..."
     )
-    search.fit(X_train, y_train)
+
+    # early_stopping_rounds requires an eval_set for validation
+    fit_params = {}
+    if X_val is not None and y_val is not None:
+        fit_params["eval_set"] = [(X_val, y_val)]
+        fit_params["verbose"] = False
+        print(f"  Using held-out eval_set ({X_val.shape[0]:,} samples) for early stopping")
+
+    search.fit(X_train, y_train, **fit_params)
 
     print(f"  Best CV AUC: {search.best_score_:.4f}")
     print("  Best params:")

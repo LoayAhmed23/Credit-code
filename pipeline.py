@@ -282,7 +282,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     # ------------------------------------------------------------------
 
     if tune:
-        best_model, best_params = tune_hyperparameters(X_train, y_train)
+        best_model, best_params = tune_hyperparameters(X_train, y_train, X_test, y_test)
         print("  Generating predictions on test set ...")
         y_proba = best_model.predict_proba(X_test)[:, 1]
 
@@ -343,7 +343,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         # NOTE: tuning path currently uses sklearn API and ignores early stopping.
         # We keep behavior consistent: after selection, tune on the reduced set.
         _banner(10, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
-        best_model, best_params = tune_hyperparameters(X_train, y_train)
+        best_model, best_params = tune_hyperparameters(X_train, y_train, X_test, y_test)
         print("  Generating predictions on test set ...")
         y_proba = best_model.predict_proba(X_test)[:, 1]
 
