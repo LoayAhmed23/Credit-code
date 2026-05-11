@@ -164,22 +164,44 @@ EARLY_STOPPING_ROUNDS = 50
 # SMOTE (class imbalance handling)
 # ---------------------------------------------------------------------------
 SMOTE_ENABLED = True
-SMOTE_SAMPLING_STRATEGY = 0.7   # ratio of minority to majority after resampling
+SMOTE_SAMPLING_STRATEGY = 0.5   # ratio of minority to majority after resampling
                                 # 0.5 means minority becomes 50% of majority count
 
 # ---------------------------------------------------------------------------
 # Hyperparameter tuning
 # ---------------------------------------------------------------------------
-TUNE_N_ITER = 20
-TUNE_CV_FOLDS = 3
+TUNE_N_ITER = 60          # increased from 20 for better search coverage
+TUNE_CV_FOLDS = 5         # increased from 3 for more robust CV estimates
 N_GPUS = 2   # number of GPUs for parallel CV folds in tuning
 
-# XGBoost hyperparameters for tuning
+# F-beta value for threshold tuning (lower = more precision, higher = more recall)
+# 1.0 = balanced F1, 2.0 = recall-heavy, 1.5 = mild recall preference
+FBETA_VALUE = 1.5
+
+# XGBoost hyperparameters for tuning — expanded search space
+from scipy.stats import uniform, randint, loguniform
+
 TUNE_PARAM_GRID = {
-    "max_depth":        [3, 5, 7],
-    "learning_rate":    [0.01, 0.05, 0.1],    
-    "colsample_bytree": [0.6, 0.8, 1.0],      
-    "subsample":        [0.6, 0.8, 1.0],      
+    # Tree structure
+    "max_depth":          randint(3, 10),          # was [3, 5, 7]
+    "min_child_weight":   randint(1, 20),           # NEW: controls overfitting
+    "gamma":              uniform(0, 5),            # NEW: min split loss
+
+    # Learning rate & boosting rounds
+    "learning_rate":      loguniform(0.005, 0.3),   # was [0.01, 0.05, 0.1]
+    "n_estimators":       randint(100, 1500),        # NEW: number of trees
+
+    # Sampling / regularization
+    "colsample_bytree":   uniform(0.3, 0.7),        # was [0.6, 0.8, 1.0]
+    "colsample_bylevel":  uniform(0.3, 0.7),        # NEW
+    "subsample":          uniform(0.5, 0.5),         # was [0.6, 0.8, 1.0]
+
+    # L1 / L2 regularization
+    "reg_alpha":          loguniform(1e-3, 10),      # NEW: L1 penalty
+    "reg_lambda":         loguniform(1e-3, 10),      # NEW: L2 penalty
+
+    # Max bins for histogram
+    "max_bin":            [64, 128, 256],
 }
 
 # ---------------------------------------------------------------------------

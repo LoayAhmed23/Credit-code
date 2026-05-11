@@ -80,13 +80,16 @@ def train_xgboost(X_train, y_train, X_val, y_val, params=None, sample_weight_tra
 
     Returns the trained Booster.
     """
-    params = params or config.XGB_PARAMS
+    params = params or dict(config.XGB_PARAMS)  # copy to avoid mutating config
 
-    # Automatic scale_pos_weight calculation if not provided
+    # Automatic scale_pos_weight: skip when SMOTE already rebalanced the data
     if "scale_pos_weight" not in params:
-        num_neg = (y_train == 0).sum()
-        num_pos = (y_train == 1).sum()
-        params["scale_pos_weight"] = num_neg / num_pos if num_pos > 0 else 1.0
+        if getattr(config, "SMOTE_ENABLED", False):
+            params["scale_pos_weight"] = 1.0
+        else:
+            num_neg = (y_train == 0).sum()
+            num_pos = (y_train == 1).sum()
+            params["scale_pos_weight"] = num_neg / num_pos if num_pos > 0 else 1.0
 
     # IMPORTANT: pass explicit feature_names so get_score() returns real column
     # names instead of f0/f1/... (prevents top-feature selection mismatch).
@@ -132,10 +135,17 @@ def tune_hyperparameters(X_train, y_train):
     Returns (best_estimator, best_params).
     """
 
-    # Automatic scale_pos_weight calculation
-    num_neg = (y_train == 0).sum()
-    num_pos = (y_train == 1).sum()
-    scale_pos_weight = num_neg / num_pos if num_pos > 0 else 1.0
+    # When SMOTE is active, the training set is already rebalanced.
+    # Applying scale_pos_weight on top of SMOTE double-boosts the minority
+    # class, causing the model to over-predict positives (low precision).
+    if getattr(config, "SMOTE_ENABLED", False):
+        scale_pos_weight = 1.0
+        print("  [tune] SMOTE is active — setting scale_pos_weight=1.0 (no double-boost)")
+    else:
+        num_neg = (y_train == 0).sum()
+        num_pos = (y_train == 1).sum()
+        scale_pos_weight = num_neg / num_pos if num_pos > 0 else 1.0
+        print(f"  [tune] No SMOTE — using scale_pos_weight={scale_pos_weight:.2f}")
 
     model = xgb.XGBClassifier(
         objective="binary:logistic",
@@ -143,14 +153,11 @@ def tune_hyperparameters(X_train, y_train):
         tree_method="hist",
         device="cuda",
         random_state=config.RANDOM_STATE,
-        scale_pos_weight=scale_pos_weight
+        scale_pos_weight=scale_pos_weight,
+        early_stopping_rounds=config.EARLY_STOPPING_ROUNDS,
     )
 
     scorer = make_scorer(roc_auc_score, needs_proba=True)
-
-    # Use the number of available cores for faster Parallel CV tuning.
-    import multiprocessing
-    n_cores = multiprocessing.cpu_count()
 
     search = RandomizedSearchCV(
         estimator=model,

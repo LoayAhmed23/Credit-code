@@ -287,7 +287,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_proba = best_model.predict_proba(X_test)[:, 1]
 
         print("  Finding best decision threshold (F-beta) ...")
-        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=config.FBETA_VALUE)
         print(f"  Best threshold: {best_threshold:.4f}")
 
         y_pred        = (y_proba >= best_threshold).astype(int)
@@ -305,7 +305,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_proba = bst.predict(dtest)
 
         print("  Finding best decision threshold (F-beta) ...")
-        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=config.FBETA_VALUE)
         print(f"  Best threshold: {best_threshold:.4f}")
 
         y_pred        = (y_proba >= best_threshold).astype(int)
@@ -348,7 +348,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_proba = best_model.predict_proba(X_test)[:, 1]
 
         print("  Finding best decision threshold (F-beta) ...")
-        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=config.FBETA_VALUE)
         print(f"  Best threshold: {best_threshold:.4f}")
 
         y_pred = (y_proba >= best_threshold).astype(int)
@@ -369,7 +369,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_proba = bst.predict(dtest)
 
         print("  Finding best decision threshold (F-beta) ...")
-        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=2.0)
+        best_threshold = find_best_threshold_fbeta(y_test, y_proba, beta=config.FBETA_VALUE)
         print(f"  Best threshold: {best_threshold:.4f}")
 
         y_pred = (y_proba >= best_threshold).astype(int)
