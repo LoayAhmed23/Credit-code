@@ -288,8 +288,8 @@ def engineer_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     trend_df = grouped[month_col].nunique().rename("months_observed").to_frame()
 
     if "overdue_ratio" in df.columns:
-        trend_df["months_with_overdue"] = grouped.apply(
-            lambda g: (g["overdue_ratio"] > 0).sum()
+        trend_df["months_with_overdue"] = grouped["overdue_ratio"].apply(
+            lambda s: (s > 0).sum()
         )
 
     # --- Trend / volatility for key feature columns ---

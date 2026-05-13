@@ -3,6 +3,7 @@ import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+import numpy as np
 import xgboost as xgb
 import joblib
 
@@ -84,5 +85,109 @@ def plot_feature_importance():
     else:
         print("Model doesn't support feature importance via get_score.")
 
+
+def plot_feature_target_correlation(X: pd.DataFrame = None,
+                                    y: pd.Series = None,
+                                    top_n: int = 30):
+    """Plot the Pearson correlation between each feature and the binary target.
+
+    Parameters
+    ----------
+    X : pd.DataFrame, optional
+        Preprocessed feature matrix.  If *None*, the function will
+        re-derive it from the raw data using the saved model artifacts.
+    y : pd.Series, optional
+        Binary target vector.  Required when *X* is provided.
+    top_n : int
+        Number of features to display (by absolute correlation).
+    """
+    output_dir = os.path.join(config.BASE_DIR, "output")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # If X/y not supplied, reconstruct from raw data + saved artifacts
+    # ------------------------------------------------------------------
+    if X is None or y is None:
+        from data_loader import load_prime_data, load_transaction_data, merge_data
+        from feature_engineering import (
+            engineer_prime_features,
+            engineer_transaction_features,
+            engineer_temporal_features,
+            create_target,
+        )
+        from preprocessing import preprocess
+
+        print("  [correlation] Re-building X/y from raw data ...")
+        prime_df = load_prime_data()
+        txn_df = load_transaction_data()
+        prime_df = engineer_prime_features(prime_df)
+        txn_features = engineer_transaction_features(txn_df)
+        merged = merge_data(prime_df, txn_features)
+        merged = create_target(merged)
+        merged = engineer_temporal_features(merged)
+        target = merged[config.TARGET_COL]
+
+        try:
+            pipeline_data = joblib.load(config.MODEL_PATH)
+            artifacts = pipeline_data["artifacts"]
+        except Exception as e:
+            print(f"  Could not load artifacts for correlation plot: {e}")
+            return
+
+        X, y, _ = preprocess(merged, target, fit=False, artifacts=artifacts)
+
+    # ------------------------------------------------------------------
+    # Compute correlations
+    # ------------------------------------------------------------------
+    # Keep only numeric columns (label-encoded cats are already int)
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    corr_values = X[numeric_cols].corrwith(y).dropna()
+    corr_values.name = "correlation"
+
+    # Sort by absolute correlation and keep top N
+    corr_df = (
+        corr_values
+        .abs()
+        .sort_values(ascending=False)
+        .head(top_n)
+        .to_frame(name="abs_corr")
+    )
+    # Attach the signed value for the colour mapping
+    corr_df["correlation"] = corr_values.loc[corr_df.index]
+    corr_df["Feature"] = (
+        corr_df.index
+        .str.replace("num__", "", regex=False)
+        .str.replace("cat__", "", regex=False)
+    )
+
+    # ------------------------------------------------------------------
+    # Plot
+    # ------------------------------------------------------------------
+    sns.set_theme(style="whitegrid")
+    fig, ax = plt.subplots(figsize=(12, max(6, top_n * 0.4)))
+
+    palette = ["#e74c3c" if v < 0 else "#2ecc71" for v in corr_df["correlation"]]
+
+    sns.barplot(
+        x="correlation", y="Feature", data=corr_df,
+        palette=palette, orient="h", ax=ax,
+    )
+
+    ax.set_title(
+        f"Top {len(corr_df)} Feature–Target Correlations (Pearson)",
+        fontsize=14, fontweight="bold",
+    )
+    ax.set_xlabel("Pearson Correlation with Target", fontsize=12)
+    ax.set_ylabel("Feature", fontsize=12)
+    ax.axvline(0, color="grey", linewidth=0.8, linestyle="--")
+
+    plt.tight_layout()
+    save_path = os.path.join(output_dir, "feature_target_correlation.png")
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    print(f"  Saved feature–target correlation plot to {save_path}")
+
+
 if __name__ == "__main__":
     plot_feature_importance()
+    plot_feature_target_correlation()

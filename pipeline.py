@@ -29,7 +29,7 @@ from model import (
     subset_to_features,
 )
 from evaluation import evaluate, generate_report, find_best_threshold_fbeta
-from feature_importance import plot_feature_importance
+from feature_importance import plot_feature_importance, plot_feature_target_correlation
 
 def _ensure_output_dir():
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
@@ -414,6 +414,11 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         plot_feature_importance()
     except Exception as e:
         print(f"Error plotting feature importance: {e}")
+
+    try:
+        plot_feature_target_correlation(X, y)
+    except Exception as e:
+        print(f"Error plotting feature-target correlation: {e}")
 
     return metrics
 
