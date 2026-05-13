@@ -177,9 +177,9 @@ SMOTE_SAMPLING_STRATEGY = 0.5   # ratio of minority to majority after resampling
 # ---------------------------------------------------------------------------
 # Hyperparameter tuning
 # ---------------------------------------------------------------------------
-TUNE_N_ITER = 60          # increased from 20 for better search coverage
-TUNE_CV_FOLDS = 5         # increased from 3 for more robust CV estimates
-N_GPUS = 2   # number of GPUs for parallel CV folds in tuning
+TUNE_N_ITER = 100         # increased from 60 for broader search coverage
+TUNE_CV_FOLDS = 5         # 5-fold CV for robust estimates
+N_GPUS = 2                # number of GPUs for parallel CV folds in tuning
 
 # F-beta value for threshold tuning (lower = more precision, higher = more recall)
 # 1.0 = balanced F1, 2.0 = recall-heavy, 1.5 = mild recall preference
@@ -189,26 +189,29 @@ FBETA_VALUE = 1.5
 from scipy.stats import uniform, randint, loguniform
 
 TUNE_PARAM_GRID = {
-    # Tree structure
-    "max_depth":          randint(3, 10),          # was [3, 5, 7]
-    "min_child_weight":   randint(1, 20),           # NEW: controls overfitting
-    "gamma":              uniform(0, 5),            # NEW: min split loss
+    # ---- Tree structure ----
+    "max_depth":          randint(3, 12),            # wider: up to 12
+    "min_child_weight":   randint(1, 30),            # wider: up to 30
+    "gamma":              uniform(0, 10),             # wider: up to 10
+    "max_leaves":         [0, 15, 31, 63, 127],      # NEW: leaf-count limit (0=unlimited)
+    "grow_policy":        ["depthwise", "lossguide"], # NEW: tree growth strategy
 
-    # Learning rate & boosting rounds
-    "learning_rate":      loguniform(0.005, 0.3),   # was [0.01, 0.05, 0.1]
-    "n_estimators":       randint(100, 1500),        # NEW: number of trees
+    # ---- Learning rate & boosting rounds ----
+    "learning_rate":      loguniform(0.003, 0.3),    # wider low-end
+    "n_estimators":       randint(100, 2000),         # wider: up to 2000
 
-    # Sampling / regularization
-    "colsample_bytree":   uniform(0.3, 0.7),        # was [0.6, 0.8, 1.0]
-    "colsample_bylevel":  uniform(0.3, 0.7),        # NEW
-    "subsample":          uniform(0.5, 0.5),         # was [0.6, 0.8, 1.0]
+    # ---- Sampling / regularization ----
+    "colsample_bytree":   uniform(0.2, 0.8),         # wider: 0.2–1.0
+    "colsample_bylevel":  uniform(0.3, 0.7),         # 0.3–1.0
+    "colsample_bynode":   uniform(0.5, 0.5),         # NEW: per-node column sampling
+    "subsample":          uniform(0.4, 0.6),          # wider: 0.4–1.0
 
-    # L1 / L2 regularization
-    "reg_alpha":          loguniform(1e-3, 10),      # NEW: L1 penalty
-    "reg_lambda":         loguniform(1e-3, 10),      # NEW: L2 penalty
+    # ---- L1 / L2 regularization ----
+    "reg_alpha":          loguniform(1e-4, 10),       # wider low-end
+    "reg_lambda":         loguniform(1e-4, 10),       # wider low-end
 
-    # Max bins for histogram
-    "max_bin":            [64, 128, 256],
+    # ---- Histogram bins ----
+    "max_bin":            [32, 64, 128, 256, 512],    # added 32 and 512
 }
 
 # ---------------------------------------------------------------------------
