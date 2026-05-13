@@ -376,10 +376,29 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         model_to_save = bst
 
     # ------------------------------------------------------------------
+    # Collect model parameters for the report
+    # ------------------------------------------------------------------
+    if tune:
+        model_params = dict(best_params)
+    else:
+        # For the native Booster path, pull the params that were actually used
+        model_params = dict(config.XGB_PARAMS)
+        model_params["num_boost_round"] = config.NUM_BOOST_ROUND
+        model_params["early_stopping_rounds"] = config.EARLY_STOPPING_ROUNDS
+        model_params["best_iteration"] = getattr(bst, "best_iteration", "N/A")
+
+    model_params["best_threshold"] = round(best_threshold, 4)
+    model_params["smote_enabled"] = getattr(config, "SMOTE_ENABLED", False)
+    if getattr(config, "SMOTE_ENABLED", False):
+        model_params["smote_sampling_strategy"] = config.SMOTE_SAMPLING_STRATEGY
+    model_params["n_features"] = X_train.shape[1]
+
+    # ------------------------------------------------------------------
     _banner(12, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
     metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
-    report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH)
+    report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH,
+                              model_params=model_params)
     print(report)
 
     print("  Scoring all customers ...")

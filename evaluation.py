@@ -46,7 +46,8 @@ def evaluate(y_true, y_pred, y_proba, threshold=0.5) -> dict:
 
 
 def generate_report(metrics: dict, y_true, y_pred,
-                     output_path: str = None) -> str:
+                     output_path: str = None,
+                     model_params: dict = None) -> str:
     """Build a plain-text evaluation report and optionally write it to disk."""
     lines = []
     lines.append("=" * 60)
@@ -59,6 +60,14 @@ def generate_report(metrics: dict, y_true, y_pred,
     lines.append("-" * 40)
     for name, value in metrics.items():
         lines.append(f"  {name:<12s}: {value:.4f}")
+
+    # Model parameters
+    if model_params:
+        lines.append("")
+        lines.append("MODEL PARAMETERS")
+        lines.append("-" * 40)
+        for name, value in sorted(model_params.items()):
+            lines.append(f"  {name:<30s}: {value}")
 
     # Class distribution
     lines.append("")
