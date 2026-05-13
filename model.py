@@ -163,7 +163,7 @@ def tune_hyperparameters(X_train, y_train, X_val=None, y_val=None):
         early_stopping_rounds=config.EARLY_STOPPING_ROUNDS,
     )
 
-    scorer = make_scorer(roc_auc_score, needs_proba=True)
+    scorer = make_scorer(roc_auc_score, response_method="predict_proba")
 
     search = RandomizedSearchCV(
         estimator=model,
