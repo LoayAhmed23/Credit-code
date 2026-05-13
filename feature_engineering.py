@@ -66,6 +66,8 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     # --- Outlier capping (p99.9) for overdue amount ---
     overdue_col = "OVERDUEAMOUNT" if "OVERDUEAMOUNT" in df.columns else "OVERDUE_AMOUNT"
     if overdue_col in df.columns:
+        # Bank stores overdue as negative (accounting convention) — flip to positive
+        df[overdue_col] = df[overdue_col].abs()
         p99 = df[overdue_col].quantile(0.999)
         print(f"[feature_eng] Overdue outliers capped at {p99:.2f}: "
               f"{(df[overdue_col] > p99).sum()} rows")
@@ -74,7 +76,7 @@ def engineer_prime_features(df: pd.DataFrame) -> pd.DataFrame:
     # --- Core numeric references (accept both naming conventions) ---
     credit_limit    = _get_numeric(df, "CREDIT_LIMIT")
     available_limit = _get_numeric(df, "AVAILABLE_LIMIT")
-    ledger          = _get_numeric(df, "LEDGER_BALANCE")
+    ledger          = _get_numeric(df, "LEDGER_BALANCE").abs()   # stored as negative
     overdue         = _get_numeric(df, "OVERDUEAMOUNT", "OVERDUE_AMOUNT")
 
     credit_limit_safe = credit_limit.replace(0, np.nan)
