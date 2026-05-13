@@ -19,7 +19,7 @@ from feature_engineering import (
     engineer_temporal_features,
     create_target,
 )
-from preprocessing import preprocess
+from preprocessing import preprocess, drop_uncorrelated_features
 from model import (
     train_xgboost,
     tune_hyperparameters,
@@ -120,7 +120,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     sample : bool
         If True, use only 25% of the data (stratified) for fast iteration.
     """
-    TOTAL = 12
+    TOTAL = 13
     _ensure_output_dir()
 
     # ------------------------------------------------------------------
@@ -201,12 +201,20 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         sample_weight = sample_weight.loc[X.index]
 
     # ------------------------------------------------------------------
-    _banner(7, TOTAL, "LEAKAGE CHECK")
+    _banner(7, TOTAL, "CORRELATION FILTER")
+    # ------------------------------------------------------------------
+    X, dropped_cols = drop_uncorrelated_features(X, y)
+    # Update artifacts so the scoring pipeline uses the same column set
+    if dropped_cols:
+        artifacts["feature_order"] = [c for c in artifacts["feature_order"] if c not in dropped_cols]
+
+    # ------------------------------------------------------------------
+    _banner(8, TOTAL, "LEAKAGE CHECK")
     # ------------------------------------------------------------------
     check_for_leakage(X, y, abort_on_leak=True)
 
     # ------------------------------------------------------------------
-    _banner(8, TOTAL, "TRAIN / TEST SPLIT (temporal)")
+    _banner(9, TOTAL, "TRAIN / TEST SPLIT (temporal)")
     # ------------------------------------------------------------------
     # Use temporal split: train on older months, test on the latest month.
     # Falls back to a random stratified split if month data is unavailable.
@@ -256,7 +264,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     print(f"  Test  default rate: {y_test.sum()  / len(y_test)  * 100:.1f}%")
 
     # ------------------------------------------------------------------
-    _banner(9, TOTAL, "SMOTE OVERSAMPLING (train only)")
+    _banner(10, TOTAL, "SMOTE OVERSAMPLING (train only)")
     # ------------------------------------------------------------------
     if getattr(config, "SMOTE_ENABLED", False):
         from imblearn.over_sampling import SMOTE
@@ -276,9 +284,9 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     if tune:
-        _banner(10, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(11, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
     else:
-        _banner(10, TOTAL, "XGBOOST TRAINING")
+        _banner(11, TOTAL, "XGBOOST TRAINING")
     # ------------------------------------------------------------------
 
     if tune:
@@ -313,7 +321,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
-    _banner(11, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
+    _banner(12, TOTAL, "TOP-20 GAIN FEATURE SELECTION (NO INTERSECTION)")
     # ------------------------------------------------------------------
     # Train a light model to get gain-based importances, then retrain using
     # only the top-N features. This avoids any intersection-based selection.
@@ -342,7 +350,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     if tune:
         # NOTE: tuning path currently uses sklearn API and ignores early stopping.
         # We keep behavior consistent: after selection, tune on the reduced set.
-        _banner(10, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
+        _banner(11, TOTAL, "HYPERPARAMETER TUNING + TRAINING")
         best_model, best_params = tune_hyperparameters(X_train, y_train, X_test, y_test)
         print("  Generating predictions on test set ...")
         y_proba = best_model.predict_proba(X_test)[:, 1]
@@ -354,7 +362,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
         y_pred = (y_proba >= best_threshold).astype(int)
         model_to_save = best_model
     else:
-        _banner(10, TOTAL, "XGBOOST TRAINING")
+        _banner(11, TOTAL, "XGBOOST TRAINING")
         print("  Training final XGBoost on top-gain features ...")
         bst = train_xgboost(
             X_train,
@@ -394,7 +402,7 @@ def run_training_pipeline(tune: bool = False, sample: bool = False):
     model_params["n_features"] = X_train.shape[1]
 
     # ------------------------------------------------------------------
-    _banner(12, TOTAL, "EVALUATION & OUTPUT")
+    _banner(13, TOTAL, "EVALUATION & OUTPUT")
     # ------------------------------------------------------------------
     metrics = evaluate(y_test, y_pred, y_proba, threshold=best_threshold)
     report  = generate_report(metrics, y_test, y_pred, config.REPORT_PATH,

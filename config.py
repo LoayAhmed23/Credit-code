@@ -130,6 +130,13 @@ DROP_COLS = [
 LEAKAGE_AUC_THRESHOLD = 0.95
 
 # ---------------------------------------------------------------------------
+# Correlation-based feature filtering — drop features whose absolute Pearson
+# correlation with the target falls below this threshold.
+# Set to 0.0 to disable (keep all features).
+# ---------------------------------------------------------------------------
+CORR_THRESHOLD = 0.02
+
+# ---------------------------------------------------------------------------
 # Date columns (for parsing)
 # ---------------------------------------------------------------------------
 DATE_COLS_PRIME = [

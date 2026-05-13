@@ -111,3 +111,53 @@ def preprocess(X: pd.DataFrame, y: pd.Series = None,
 
     print(f"[preprocess] Output shape: {X.shape}  |  fit={fit}")
     return X, y, artifacts
+
+
+# ---------------------------------------------------------------------------
+# Correlation-based feature filter
+# ---------------------------------------------------------------------------
+
+def drop_uncorrelated_features(
+    X: pd.DataFrame,
+    y: pd.Series,
+    threshold: float = None,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Drop features whose absolute Pearson correlation with *y* is below *threshold*.
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Feature matrix (post-preprocessing, all numeric).
+    y : pd.Series
+        Binary target vector, aligned to X.
+    threshold : float, optional
+        Minimum absolute correlation to keep a feature.
+        Defaults to ``config.CORR_THRESHOLD``.
+
+    Returns
+    -------
+    X_filtered : pd.DataFrame
+        Feature matrix with low-correlation columns removed.
+    dropped : list[str]
+        Names of the dropped columns.
+    """
+    threshold = threshold if threshold is not None else getattr(config, "CORR_THRESHOLD", 0.02)
+
+    if threshold <= 0:
+        print("  [corr-filter] Threshold <= 0 — skipping (all features kept).")
+        return X, []
+
+    correlations = X.corrwith(y).abs().fillna(0)
+    keep_mask = correlations >= threshold
+    dropped = correlations[~keep_mask].sort_values().index.tolist()
+
+    if dropped:
+        print(f"  [corr-filter] Dropping {len(dropped)} feature(s) with |corr| < {threshold}:")
+        for col in dropped:
+            print(f"    {col:<45} |corr| = {correlations[col]:.4f}")
+    else:
+        print(f"  [corr-filter] All features pass the threshold ({threshold}).")
+
+    X_filtered = X[correlations[keep_mask].index.tolist()]
+    print(f"  [corr-filter] Features kept: {X_filtered.shape[1]} / {X.shape[1]}")
+    return X_filtered, dropped
